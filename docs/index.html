@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Anteckningar & att göra</title>
+<link rel="stylesheet" href="style.css" />
+<script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="github-storage.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div class="header-titles">
+      <h1>Anteckningar &amp; att göra</h1>
+      <span class="sub" id="storageBadge">Ansluter…</span>
+    </div>
+    <div class="header-actions">
+      <button id="btnRefresh" title="Hämta senaste data">↻</button>
+      <button id="btnSettings" title="Inställningar">⚙</button>
+    </div>
+  </header>
+  <div id="connectionWarning" class="hint warning hidden"></div>
+  <div id="saveStatus" class="hint hidden"></div>
+
+  <!-- ===== Flikar ===== -->
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="note" role="tab">📝 Anteckningar <span class="count" id="countNote">0</span></button>
+    <button class="tab" data-tab="todo" role="tab">☑️ Att göra <span class="count" id="countTodo">0</span></button>
+  </nav>
+
+  <!-- ===== Ny / redigera ===== -->
+  <section class="panel">
+    <button id="btnNew" class="primary full">+ Ny anteckning</button>
+    <div id="editor" class="hidden">
+      <label>Rubrik
+        <input type="text" id="fTitle" placeholder="t.ex. Kontrollera ingjutningsgods" />
+      </label>
+      <label>Text
+        <textarea id="fBody" rows="4" placeholder="Skriv din anteckning…"></textarea>
+      </label>
+      <div id="todoFields" class="grid2 hidden">
+        <label>Förfallodatum
+          <input type="date" id="fDue" />
+        </label>
+        <label>Ansvarig
+          <input type="text" id="fAssignee" placeholder="Namn/UE" />
+        </label>
+        <label>Prioritet
+          <select id="fPriority">
+            <option value="normal">Normal</option>
+            <option value="hog">Hög</option>
+            <option value="lag">Låg</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="link-box">
+        <div class="row">
+          <button id="btnAttachSelection" type="button">🔗 Koppla markerade objekt (<span id="selCount">0</span>)</button>
+          <button id="btnClearObjects" type="button" class="link hidden">Ta bort koppling</button>
+        </div>
+        <div id="fObjects" class="chips"></div>
+        <label class="check"><input type="checkbox" id="fSaveView" /> Spara aktuell kameravy</label>
+        <label>4D-planering
+          <input type="text" id="fPlanItem" list="planItemOptions" placeholder="Sök planerat objekt (valfritt)…" autocomplete="off" />
+          <datalist id="planItemOptions"></datalist>
+        </label>
+        <div id="fPlanItemInfo" class="hint"></div>
+      </div>
+
+      <div class="row end">
+        <button id="btnCancel" type="button">Avbryt</button>
+        <button id="btnSave" type="button" class="primary">Spara</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Lista ===== -->
+  <section class="panel">
+    <div class="filters">
+      <input type="search" id="search" placeholder="Sök…" />
+      <label class="check"><input type="checkbox" id="onlySelected" /> Endast markerade objekt</label>
+      <label class="check todo-only hidden"><input type="checkbox" id="hideDone" /> Dölj klara</label>
+    </div>
+    <ul id="list" class="list"></ul>
+    <p id="emptyHint" class="hint hidden">Inget här än.</p>
+  </section>
+
+  <!-- ===== Export ===== -->
+  <section class="panel">
+    <h2>Exportera</h2>
+    <p class="hint">Exporterar det som visas i listan ovan (sökning och filter gäller). Excel innehåller både anteckningar och att göra.</p>
+    <div class="row">
+      <button id="btnExportXlsx">⬇ Excel (.xlsx)</button>
+      <button id="btnExportMd">⬇ Markdown (.md)</button>
+      <button id="btnCopy">📋 Kopiera text</button>
+    </div>
+  </section>
+
+</div>
+
+<!-- ===== Inställningar ===== -->
+<dialog id="settingsDialog">
+  <form method="dialog">
+    <h2>Inställningar</h2>
+    <label>Ditt namn <span class="hint">(visas på anteckningar och kommentarer)</span>
+      <input type="text" id="sUserName" autocomplete="name" />
+    </label>
+    <label>GitHub-token för 4D-data
+      <input type="password" id="sToken" autocomplete="off" placeholder="github_pat_…" />
+    </label>
+    <p class="hint">Samma token som i 4D-planering (se GITHUB_TOKEN_SETUP.md). Lämnar du fältet tomt används 4D-planeringens token automatiskt om den finns i den här webbläsaren, annars sparas allt bara lokalt.</p>
+    <div class="row end">
+      <button value="cancel">Avbryt</button>
+      <button id="btnSaveSettings" value="save" class="primary">Spara</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

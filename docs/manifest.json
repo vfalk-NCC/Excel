@@ -1,0 +1,8 @@
+{
+  "url": "https://vfalk-ncc.github.io/Excel/index.html",
+  "title": "Anteckningar & att göra",
+  "icon": "https://vfalk-ncc.github.io/Excel/icon.svg",
+  "infoUrl": "https://github.com/vfalk-NCC/Excel/blob/main/docs/README.md",
+  "description": "Anteckningar och att göra-listor kopplade till objekt och vyer i 3D-modellen. Export till Excel/Markdown, synk mot 4D-planering.",
+  "extensionType": ["3dviewer"]
+}

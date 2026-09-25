@@ -1,0 +1,411 @@
+// ---------------------------------------------------------------------
+// GitHub-storage.js
+// ---------------------------------------------------------------------
+// Ersätter Supabase/PostgREST som datalager. All projektdata lagras som
+// JSON-filer i det privata repot vfalk-NCC/4D-data, en mapp per Trimble-
+// projekt (projects/<projectId>/<tabell>.json), via GitHub Contents API.
+//
+// Delas av 4D-dashboard och 4D-planering (identisk kopia i båda repona,
+// eftersom GitHub Pages inte kan dela filer mellan repon).
+//
+// Autentisering: en fine-grained personal access token, scopead till
+// enbart 4D-data-repot (Contents: Read and write). Token:en matas in av
+// användaren i respektive apps inställningspanel och sparas i
+// localStorage, precis som Supabase-URL/anon-key gjorde tidigare. Den
+// är alltså lika synlig i klientkoden som den gamla anon-nyckeln var —
+// samma förtroendemodell, bara en annan leverantör. Se
+// GITHUB_TOKEN_SETUP.md för hur token:en skapas.
+//
+// API-yta:
+//   ghReadJSON(token, path)                    -> array (tom array om filen inte finns än)
+//   ghWriteJSON(token, path, mutateFn, message) -> skriver om resultatet av mutateFn(currentArray),
+//                                                   läser om och försöker igen vid skrivkrock (HTTP 409)
+//   ghUpsertOne(token, path, record, keyFn, message) -> insert-eller-uppdatera efter keyFn (motsvarar on_conflict=)
+//   ghUploadBinary(token, path, file, message)  -> laddar upp en bilaga (File/Blob), returnerar path
+//   ghReadBinaryUrl(token, path)                -> hämtar en bilaga och returnerar en blob:-URL för visning
+//   ghDeleteBinary(token, path, message)        -> tar bort en bilaga (best-effort, kastar inte om den redan är borta)
+//   ghNewId()                                    -> crypto.randomUUID(), ersätter Postgres bigint identity
+// ---------------------------------------------------------------------
+
+const GH_OWNER = "vfalk-NCC";
+const GH_REPO = "4D-data";
+const GH_BRANCH = "main";
+const GH_API_BASE = "https://api.github.com";
+
+function ghNewId() {
+  return crypto.randomUUID();
+}
+
+function ghHeaders(token, accept) {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: accept || "application/vnd.github+json",
+  };
+}
+
+function ghUtf8ToB64(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function ghB64ToUtf8(b64) {
+  const binary = atob(b64.replace(/\n/g, ""));
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+function ghContentsUrl(path) {
+  return `${GH_API_BASE}/repos/${GH_OWNER}/${GH_REPO}/contents/${path}`;
+}
+
+/** Hämtar en fils metadata + innehåll (avkodat som text). null om filen inte finns. */
+async function ghGetFile(token, path) {
+  const res = await fetch(`${ghContentsUrl(path)}?ref=${GH_BRANCH}`, {
+    headers: ghHeaders(token),
+  });
+  if (res.status === 404) return { data: null, sha: null };
+  if (!res.ok) {
+    throw new Error(`GitHub GET ${path} misslyckades: ${res.status}`);
+  }
+  const json = await res.json();
+  if (Array.isArray(json)) {
+    // path pekar på en mapp, inte en fil - ska inte hända i vårt bruk
+    throw new Error(`GitHub-path ${path} är en mapp, inte en fil`);
+  }
+  const text = ghB64ToUtf8(json.content);
+  return { data: JSON.parse(text), sha: json.sha };
+}
+
+/** Bara metadata (sha) - används för bilagor där vi inte vill JSON-avkoda innehållet. */
+async function ghGetMeta(token, path) {
+  const res = await fetch(`${ghContentsUrl(path)}?ref=${GH_BRANCH}`, {
+    headers: ghHeaders(token),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`GitHub GET (meta) ${path} misslyckades: ${res.status}`);
+  const json = await res.json();
+  return { sha: json.sha, size: json.size };
+}
+
+async function ghPutFile(token, path, contentB64, sha, message) {
+  const body = {
+    message: message || `Uppdatera ${path}`,
+    content: contentB64,
+    branch: GH_BRANCH,
+  };
+  if (sha) body.sha = sha;
+  const res = await fetch(ghContentsUrl(path), {
+    method: "PUT",
+    headers: { ...ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 409) {
+    const err = new Error("Skrivkrock (409) mot " + path);
+    err.conflict = true;
+    throw err;
+  }
+  if (!res.ok) {
+    let detail = "";
+    try { detail = (await res.json()).message || ""; } catch (e) {}
+
+    // GitHub kör en separat, strängare gräns för SKRIVANDE anrop ("secondary
+    // rate limit"/"content-generating requests" - max 80/minut, 500/timme,
+    // se docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
+    // Varje sparning i appen skriver dessutom minst två filer (plan_items.json
+    // + progresshistorik), så den nås lättare än man kanske tror vid många
+    // sparningar i följd. Träffar man den svarar GitHub med 403 eller 429.
+    //
+    // OBS: GitHub exponerar INTE "retry-after" via CORS för anrop gjorda
+    // från webbläsaren (vår app körs ju på ett annat origin än
+    // api.github.com) - deras egen dokumenterade Access-Control-Expose-
+    // Headers-lista innehåller bara ETag, Link, x-ratelimit-limit,
+    // x-ratelimit-remaining, x-ratelimit-reset, X-OAuth-Scopes,
+    // X-Accepted-OAuth-Scopes, X-Poll-Interval - INTE retry-after. Så även
+    // om GitHub skickar den headern är den osynlig för oss här (verifierat
+    // med ett riktigt Playwright/Chromium-test, se
+    // test/test_github_rate_limit_retry.js). Vi läser den ändå defensivt
+    // (kostar inget, och fungerar om GitHub någon gång börjar exponera den),
+    // men i praktiken är det x-ratelimit-remaining/-reset (om just DEN
+    // gränsen råkar vara skälet) eller annars GitHubs egen
+    // standardrekommendation på minst 60 sekunder som avgör väntetiden. Se
+    // Victors rapport 2026-09-16 (tog tid och fick ~60 sekunder varje gång)
+    // och ghWriteJSONAttempt()/ghRateLimitGate nedan för hur vi väntar ut
+    // tiden EN gång (inte upprepade snabba försök - det skulle bara
+    // förlänga spärren) och sedan försöker på nytt automatiskt, istället för
+    // att bara visa "Kunde inte spara" och kräva manuell väntan.
+    const retryAfterHeader = res.headers.get("retry-after");
+    const remainingHeader = res.headers.get("x-ratelimit-remaining");
+    const resetHeader = res.headers.get("x-ratelimit-reset");
+    const isRateLimit = (res.status === 403 || res.status === 429) && (
+      res.status === 429 || retryAfterHeader !== null || remainingHeader === "0" || /rate limit/i.test(detail)
+    );
+
+    if (isRateLimit) {
+      let retryAfterMs;
+      if (retryAfterHeader) retryAfterMs = Number(retryAfterHeader) * 1000;
+      else if (remainingHeader === "0" && resetHeader) retryAfterMs = Math.max(0, Number(resetHeader) * 1000 - Date.now());
+      else retryAfterMs = 60000; // GitHubs egen standardrekommendation när ingen header ger en exakt tid
+      const err = new Error(`GitHub-gräns (rate limit) nådd vid ${path}${detail ? ": " + detail : ""}`);
+      err.rateLimited = true;
+      err.retryAfterMs = retryAfterMs;
+      throw err;
+    }
+
+    throw new Error(`GitHub PUT ${path} misslyckades: ${res.status} ${detail}`);
+  }
+  return res.json();
+}
+
+/** Läser en JSON-array-fil. Returnerar tom array om filen inte finns än (nytt projekt). */
+async function ghReadJSON(token, path) {
+  const { data } = await ghGetFile(token, path);
+  return Array.isArray(data) ? data : [];
+}
+
+// Ett par väntande skrivningar mot SAMMA path (t.ex. att optimistisk
+// sparning hinner skicka iväg ändring nr 2 innan ändring nr 1:s
+// nätverksanrop hunnit landa) kön:as här, en Promise-kedja per path, så att
+// de körs EFTER varandra istället för att racea om samma fil samtidigt. Det
+// eliminerar inte skrivkrockar helt (en ANNAN flik/användare kan fortfarande
+// skriva mellan vår läsning och skrivning - därför finns omförsöks-loopen i
+// ghWriteJSONAttempt kvar som sista skyddsnät), men det gör att våra EGNA,
+// egeninitierade skrivningar mot samma fil i den här fliken inte i onödan
+// krockar och slösar omförsök på varandra.
+const ghWriteQueues = new Map(); // path -> Promise (senaste köade skrivningen)
+
+// GitHubs rate limit för skrivande anrop gäller HELA kontot/token:et, inte
+// en enskild fil - till skillnad från ghWriteQueues ovan (som bara serialiserar
+// skrivningar mot SAMMA path) behöver cooldown-väntan alltså delas mellan
+// ALLA paths. Utan det skulle t.ex. plan_items.json och
+// plan_item_progress_history.json (som skrivs parallellt vid varje sparning,
+// se ghWriteJSON-anropen i app.js) kunna trigga varsin oberoende 60-
+// sekundersväntan och ändå krocka med varandra på nytt så fort den ena är
+// klar.
+//
+// ghRateLimitGate är en delad, kedjad Promise som fungerar som en gemensam
+// grind: varje skrivförsök väntar in den INNAN det ens försöker (se
+// ghWriteJSONAttempt), och en skrivning som träffar en rate limit förlänger
+// grinden med sin egen väntetid. Eftersom förlängningen kedjas EFTER vad som
+// redan väntar (inte parallellt) börjar nästa köade skrivnings väntetid
+// räknas från när FÖREGÅENDE väntan är över - inte från när den själv
+// ursprungligen försökte skriva. Det var precis vad Victor bad om
+// 2026-09-16: att flera köade sparningar inte skulle räkna ner sin egen
+// 60-sekundersklocka oberoende av varandra (och då studsa tillbaka och
+// krocka med GitHub igen nästan samtidigt), utan köas efter varandra.
+let ghRateLimitGate = Promise.resolve();
+
+/** Väntar in en ev. redan pågående rate-limit-cooldown innan ett skrivförsök görs. */
+function ghAwaitRateLimitGate() {
+  return ghRateLimitGate;
+}
+
+/**
+ * Förlänger den delade cooldown-grinden med `waitMs`, KÖAT efter vad som
+ * eventuellt redan väntar - inte en ny, oberoende väntan som skulle kunna
+ * löpa ut samtidigt som en annan. Returnerar den (nya) grinden så anroparen
+ * kan vänta in just den.
+ */
+function ghExtendRateLimitGate(waitMs) {
+  ghRateLimitGate = ghRateLimitGate.catch(() => {}).then(
+    () => new Promise((resolve) => setTimeout(resolve, waitMs))
+  );
+  return ghRateLimitGate;
+}
+
+/**
+ * Läser en JSON-array-fil, kör mutateFn(currentArray) -> nyArray, och skriver
+ * tillbaka den. Vid skrivkrock (någon annan hann skriva emellan) läses filen
+ * om och mutateFn körs igen, upp till maxRetries gånger - motsvarar Postgres
+ * radlåsning fast optimistiskt via filens sha. Skrivningar mot samma `path`
+ * kö:as (se ghWriteQueues ovan) och körs i tur och ordning; skrivningar mot
+ * OLIKA paths (t.ex. plan_items.json och plan_item_progress_history.json)
+ * påverkas inte av varandra och körs fortsatt parallellt.
+ *
+ * `preFetched` (valfri) är ett redan inläst {data, sha} för samma path - t.ex.
+ * från en ghGetFile()/ghReadJSON()-läsning appen ändå precis gjorde för att
+ * visa/jämföra "före"-läget. Då slipper FÖRSTA försöket göra en egen,
+ * onödig extra GET (annars läses filen två gånger i rad för varje sparning -
+ * en i uppringande kod för att få "före"-listan, en till här - vilket
+ * dubblerar väntetiden i onödan, extra märkbart nu när plan_items.json är
+ * stort). Om ett annat köat anrop hann skriva emellan (så preFetched blivit
+ * inaktuell) upptäcks det som en vanlig skrivkrock (409) och läker sig
+ * automatiskt via omförsöks-loopen, precis som en krock från en annan flik.
+ *
+ * Nås GitHubs separata rate limit för skrivande anrop (se ghPutFile) väntar
+ * funktionen ut hela den tid GitHub bad om (eller ~60 sekunder som standard)
+ * i EN sammanhängande paus och gör sedan EXAKT ETT nytt försök - upprepas
+ * inte i onödan under tiden, det skulle bara förlänga spärren. Se Victors
+ * rapport 2026-09-16 om att sparningar krävde ~60 sekunders manuell väntan.
+ */
+function ghWriteJSON(token, path, mutateFn, message, maxRetries = 6, preFetched = null) {
+  const previous = ghWriteQueues.get(path) || Promise.resolve();
+  const run = previous
+    .catch(() => {}) // en tidigare köad skrivnings fel ska inte stoppa nästa i kön
+    .then(() => ghWriteJSONAttempt(token, path, mutateFn, message, maxRetries, preFetched));
+  ghWriteQueues.set(path, run);
+  // Städa bort kön för denna path när den senaste skrivningen är klar, så
+  // kartan inte växer obegränsat under en lång session. Detta görs via en
+  // EGEN, fristående kedja (.catch().then(), inte .finally() direkt på
+  // `run`) så att den alltid landar i "resolved" - annars skulle en
+  // misslyckad skrivning (t.ex. ett riktigt serverfel) skapa ett owatchat,
+  // ohanterat promise-avslag härifrån (utöver det avslag den anropande
+  // koden redan fångar via `run` själv), vilket webbläsaren loggar som ett
+  // extra, missvisande konsolfel.
+  run.catch(() => {}).then(() => {
+    if (ghWriteQueues.get(path) === run) ghWriteQueues.delete(path);
+  });
+  return run;
+}
+
+async function ghWriteJSONAttempt(token, path, mutateFn, message, maxRetries, preFetched) {
+  let lastErr;
+  // Eget, litet tak för hur många gånger vi väntar ut en rate limit (se
+  // ghPutFile) - oberoende av maxRetries, som är budgeten för skrivkrockar
+  // (409) och har helt andra, mycket kortare väntetider. Mer än ett par
+  // rate-limit-väntor i rad vore ovanligt och tyder på ett större problem
+  // (t.ex. att appen används av flera personer samtidigt under lång tid),
+  // inte något som är värt att fortsätta dölja i det oändliga.
+  let rateLimitRetriesLeft = 2;
+  let attempt = 0;
+  // Sant precis EFTER att VI SJÄLVA väntat ut en rate limit (se
+  // ghExtendRateLimitGate-anropet nedan) - då har vi redan gjort vår tur och
+  // ska försöka igen direkt, utan att gå via gate-kollen igen. Annars skulle
+  // vi kunna dras in i en ANNAN, senare tillkommen skrivnings YTTERLIGARE
+  // förlängning av den delade grinden (som kan ha hunnit läggas till precis
+  // efter att vår egen väntan var klar) och sluta vänta dubbelt - vilket
+  // omintetgör hela poängen med att vänta i tur och ordning.
+  let skipGateWaitOnce = false;
+  while (true) {
+    if (attempt > 0) {
+      // Backoff innan omförsök vid skrivkrock (409). Utan paus tenderar två
+      // samtidiga skrivningar mot samma fil (t.ex. ett dubbelklick på
+      // "Spara", eller två flikar/användare igång samtidigt) att hela tiden
+      // kollidera med varandra på nytt - med en stigande, lite slumpad paus
+      // hinner den ena skrivningen bli klar innan den andra läser om filen,
+      // så de flesta krockar löser sig av sig själva istället för att ta
+      // slut på omförsök.
+      const delay = Math.min(250 * 2 ** (attempt - 1), 3000) + Math.random() * 200;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    if (!skipGateWaitOnce) {
+      // Väntar in en ev. redan pågående rate-limit-cooldown (delad mellan
+      // ALLA paths, se ghRateLimitGate ovan) INNAN vi ens försöker - annars
+      // skulle en skrivning mot en ANNAN fil kunna smyga sig förbi och
+      // trigga en ny rate limit medan vi väntar ut den förra.
+      await ghAwaitRateLimitGate();
+    }
+    skipGateWaitOnce = false;
+    const { data, sha } = (attempt === 0 && preFetched) ? preFetched : await ghGetFile(token, path);
+    const current = Array.isArray(data) ? data : [];
+    const next = mutateFn(current.slice());
+    try {
+      // Kompakt JSON (ingen indentering) istället för JSON.stringify(next, null, 2)
+      // - filerna (särskilt plan_items.json, som nu innehåller hundratals
+      // poster) skrivs om i sin HELHET vid varje sparning (GitHub Contents
+      // API har ingen "ändra bara denna rad"-variant), så själva
+      // datamängden som ska laddas upp är den största kvarvarande
+      // förklaringen till upplevd sparningstid. Indentering drar annars med
+      // sig en hel del rena mellanslagstecken i onödan (grovt sett +25-35%
+      // av filstorleken för den här typen av data) utan att fylla något
+      // syfte - filen är inte tänkt att läsas för hand. Bonus: eftersom
+      // filen sedan LAGRAS kompakt blir även nästa sparnings inledande
+      // läsning av filen mindre, så vinsten byggs på sig själv över tid.
+      await ghPutFile(token, path, ghUtf8ToB64(JSON.stringify(next)), sha, message);
+      return next;
+    } catch (e) {
+      lastErr = e;
+      if (e.rateLimited && rateLimitRetriesLeft > 0) {
+        rateLimitRetriesLeft--;
+        // Förlänger den DELADE cooldown-grinden (inte bara en lokal väntan
+        // här) och väntar sedan in den - så en ANNAN köad skrivning (mot en
+        // annan path, t.ex. progresshistoriken som skrivs parallellt med
+        // plan_items.json) som råkar kolla grinden under tiden också väntar
+        // in samma cooldown, istället för att smyga förbi och trigga en ny
+        // rate limit. Nästa försök görs EXAKT en gång efteråt - inte
+        // upprepade snabba försök under tiden, det skulle bara förlänga
+        // spärren ytterligare. Räknas medvetet inte mot `attempt`/maxRetries
+        // (en annan budget, för det separata skrivkrocksfallet med helt
+        // andra väntetider).
+        console.warn(`GitHub rate limit nådd vid ${path} - väntar ${Math.round(e.retryAfterMs / 1000)}s och försöker igen automatiskt.`);
+        await ghExtendRateLimitGate(e.retryAfterMs);
+        skipGateWaitOnce = true;
+        continue;
+      }
+      if (!e.conflict) throw e;
+      if (attempt >= maxRetries) throw lastErr;
+      attempt++;
+      // annars: loopa (efter paus ovan) och försök igen med färsk sha
+    }
+  }
+}
+
+/**
+ * Insert-eller-uppdatera en post i en JSON-array-fil, matchat på keyFn
+ * (motsvarar Supabase on_conflict=). Om en post med samma nyckel redan
+ * finns slås fälten ihop (merge), annars läggs posten till.
+ */
+async function ghUpsertOne(token, path, record, keyFn, message) {
+  const key = keyFn(record);
+  return ghWriteJSON(
+    token,
+    path,
+    (arr) => {
+      const idx = arr.findIndex((r) => keyFn(r) === key);
+      if (idx >= 0) {
+        // Behåll den befintliga radens id - annars skriver record.id (ofta
+        // ett nygenererat ghNewId()) över det stabila id:t vid varje upsert.
+        const merged = { ...arr[idx], ...record, id: arr[idx].id };
+        const next = arr.slice();
+        next[idx] = merged;
+        return next;
+      }
+      return [...arr, record];
+    },
+    message
+  );
+}
+
+/** Laddar upp en bilaga (File/Blob) till given path. Returnerar path (sparas i JSON-posten). */
+async function ghUploadBinary(token, path, file, message) {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  const contentB64 = btoa(binary);
+  const existing = await ghGetMeta(token, path);
+  await ghPutFile(token, path, contentB64, existing ? existing.sha : null, message || `Lägg till bilaga ${path}`);
+  return path;
+}
+
+/** Hämtar en bilaga och returnerar en blob:-URL som kan användas i <img src>/<a href>. */
+async function ghReadBinaryUrl(token, path) {
+  const res = await fetch(`${ghContentsUrl(path)}?ref=${GH_BRANCH}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.raw" },
+  });
+  if (!res.ok) throw new Error(`GitHub GET (raw) ${path} misslyckades: ${res.status}`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+/** Tar bort en bilaga. Best-effort - kastar inte om den redan är borta. */
+async function ghDeleteBinary(token, path, message) {
+  try {
+    const meta = await ghGetMeta(token, path);
+    if (!meta) return;
+    await fetch(ghContentsUrl(path), {
+      method: "DELETE",
+      headers: { ...ghHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: message || `Ta bort bilaga ${path}`, sha: meta.sha, branch: GH_BRANCH }),
+    });
+  } catch (e) {
+    console.warn("Kunde inte ta bort bilaga (ignoreras):", path, e);
+  }
+}
