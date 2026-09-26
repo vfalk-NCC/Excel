@@ -22,6 +22,28 @@ exporterar allt till Excel eller Markdown. Använder samma datalager som
   - Markdown (`.md`) med kryssrutor för att göra-punkterna.
   - Kopiera som text, till exempel till mejl eller Teams.
 
+## Bubblor i 3D-vyn
+
+Trimbles egna text-markups har fast utseende. Därför ritas varje post som
+en egen bild och läggs i modellen med `viewer.addIcon()`. Kryssa i
+**💬 Visa bubblor i 3D** ovanför listan.
+
+- **Innehåll:** bubblan visar rubrik, datum och ansvarig, eller författare
+  för en anteckning, och 4D-status. Färgen följer typ och status: blå för
+  anteckning, orange för att göra, röd för försenad och grön för klar.
+  Ramen blir röd om det kopplade 4D-objektet är försenat.
+- **Placering:** bubblan sitter ovanför de kopplade objekten, i mitten av
+  deras ovansida. Med **📍 Välj punkt för 3D-bubbla** i formuläret kan du
+  i stället klicka ut en egen punkt i modellen.
+- **Sammanslagning:** flera poster på samma ställe blir en bubbla med
+  "+N".
+- **Klick:** klickar du på en bubbla i 3D visas och markeras motsvarande
+  kort i panelen.
+- **Filter:** bubblorna följer aktiv flik, sökning och filter.
+- **Storlek och bild** ställs in under ⚙. Syns inga bubblor, välj *Enkel
+  ikon*. Då används färdiga bilder från `callouts/` på GitHub Pages i
+  stället för genererade bilder.
+
 ## Koppling mot 4D-planering
 
 - **Samma lagring**: med GitHub-token sparas posterna i
@@ -58,6 +80,7 @@ avstängd.
 | `objects` | `[{model_id, object_id, object_name}]`, där `object_id` är det externa ID:t (IFC GUID) |
 | `camera` | Sparad kameravy (från `viewer.getCamera()`), annars `null` |
 | `author`, `created_at`, `updated_at` | Vem och när |
+| `pin` | Egen punkt `{x, y, z}` (meter) för 3D-bubblan, annars `null` |
 | `sent_to_4d_at` | När posten senast skickades som kommentar till 4D-planering |
 
 ## Publicera och installera

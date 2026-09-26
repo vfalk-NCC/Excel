@@ -64,6 +64,11 @@
         </div>
         <div id="fObjects" class="chips"></div>
         <label class="check"><input type="checkbox" id="fSaveView" /> Spara aktuell kameravy</label>
+        <div class="row">
+          <button id="btnPickPoint" type="button" title="Klicka sedan på en punkt i modellen där bubblan ska sitta">📍 Välj punkt för 3D-bubbla</button>
+          <span id="fPinInfo" class="hint"></span>
+          <button id="btnClearPin" type="button" class="link hidden">Ta bort punkt</button>
+        </div>
         <label>4D-planering
           <input type="text" id="fPlanItem" list="planItemOptions" placeholder="Sök planerat objekt (valfritt)…" autocomplete="off" />
           <datalist id="planItemOptions"></datalist>
@@ -84,7 +89,9 @@
       <input type="search" id="search" placeholder="Sök…" />
       <label class="check"><input type="checkbox" id="onlySelected" /> Endast markerade objekt</label>
       <label class="check todo-only hidden"><input type="checkbox" id="hideDone" /> Dölj klara</label>
+      <label class="check"><input type="checkbox" id="showBubbles" /> 💬 Visa bubblor i 3D</label>
     </div>
+    <p id="bubbleHint" class="hint hidden"></p>
     <ul id="list" class="list"></ul>
     <p id="emptyHint" class="hint hidden">Inget här än.</p>
   </section>
@@ -111,6 +118,15 @@
     </label>
     <label>GitHub-token för 4D-data
       <input type="password" id="sToken" autocomplete="off" placeholder="github_pat_…" />
+    </label>
+    <label>Storlek på 3D-bubblor
+      <input type="range" id="sBubbleSize" min="16" max="256" step="8" />
+    </label>
+    <label>Bild för 3D-bubblor
+      <select id="sBubbleSource">
+        <option value="generated">Detaljerad (rubrik, datum, status)</option>
+        <option value="static">Enkel ikon (om bubblorna inte syns)</option>
+      </select>
     </label>
     <p class="hint">Samma token som i 4D-planering (se GITHUB_TOKEN_SETUP.md). Lämnar du fältet tomt används 4D-planeringens token automatiskt om den finns i den här webbläsaren, annars sparas allt bara lokalt.</p>
     <div class="row end">

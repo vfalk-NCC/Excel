@@ -39,7 +39,7 @@ const PRIORITY_LABELS = { hog: "Hög", normal: "Normal", lag: "Låg" };
 let API = null;
 let projectId = null;
 let projectName = "";
-let settings = { userName: "", githubToken: "" };
+let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: 96, bubbleSource: "generated" };
 
 let items = [];                 // alla anteckningar + att göra (radformat, snake_case)
 let planItems = [];             // plan_items.json från 4D-planering
@@ -51,6 +51,8 @@ let activeTab = "note";
 let editingId = null;
 let draftObjects = [];          // [{model_id, object_id, object_name}]
 let draftCamera = null;         // kameravy från posten som redigeras
+let draftPin = null;            // {x, y, z} i meter - egen punkt för 3D-bubblan
+let pickArmed = false;          // väntar på ett klick i modellen för draftPin
 
 let selectionRuntime = [];      // [{modelId, objectRuntimeIds}] - senaste markeringen
 let selectionKeys = new Set();  // "modelId|externtId" för "Endast markerade objekt"
@@ -99,9 +101,19 @@ async function refreshAll() {
   }
 }
 
-function onWorkspaceEvent(event) {
+function onWorkspaceEvent(event, arg) {
+  // Händelsedata kommer som { data: ... } (EventArgument i Workspace API).
+  const data = arg && typeof arg === "object" && "data" in arg ? arg.data : arg;
   if (event === "viewer.onSelectionChanged" || event === "extension.onSelectionChanged") {
     onSelectionChanged();
+  } else if (event === "viewer.onPicked") {
+    onPointPicked(data);
+  } else if (event === "viewer.onIconPicked") {
+    onBubblePicked(data);
+  } else if (event === "viewer.onModelStateChanged" || event === "viewer.onModelReset") {
+    // En modell laddades/togs bort - positioner kan ha tillkommit eller försvunnit.
+    bubbleState.bboxCache.clear();
+    scheduleBubbles();
   }
 }
 
@@ -117,6 +129,12 @@ function loadSettings() {
     const plan = readPlanSettings();
     if (plan.userName) settings.userName = plan.userName;
   }
+}
+
+function saveSettings() {
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (e) { /* ignorera */ }
 }
 
 function readPlanSettings() {
@@ -155,6 +173,8 @@ function updateStorageBadge() {
 function openSettings() {
   document.getElementById("sUserName").value = settings.userName || "";
   document.getElementById("sToken").value = settings.githubToken || "";
+  document.getElementById("sBubbleSize").value = settings.bubbleSize;
+  document.getElementById("sBubbleSource").value = settings.bubbleSource;
   const dlg = document.getElementById("settingsDialog");
   dlg.returnValue = "";
   dlg.showModal();
@@ -166,10 +186,11 @@ async function onSettingsClosed() {
   const hadToken = token();
   settings.userName = document.getElementById("sUserName").value.trim();
   settings.githubToken = document.getElementById("sToken").value.trim();
-  try {
-    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  } catch (e) { /* ignorera */ }
+  settings.bubbleSize = Number(document.getElementById("sBubbleSize").value) || 96;
+  settings.bubbleSource = document.getElementById("sBubbleSource").value;
+  saveSettings();
   updateStorageBadge();
+  scheduleBubbles();
   if (hadToken !== token() && projectId) await refreshAll();
 }
 
@@ -406,10 +427,19 @@ function bindUI() {
   document.getElementById("btnAttachSelection").onclick = onAttachSelection;
   document.getElementById("btnClearObjects").onclick = () => { draftObjects = []; renderDraftObjects(); };
   document.getElementById("fPlanItem").oninput = renderPlanItemInfo;
+  document.getElementById("btnPickPoint").onclick = () => setPickArmed(!pickArmed);
+  document.getElementById("btnClearPin").onclick = () => { draftPin = null; renderDraftPin(); };
   document.getElementById("fTitle").onkeydown = (e) => { if (e.key === "Enter") onSave(); };
 
   document.getElementById("search").oninput = render;
   document.getElementById("hideDone").onchange = render;
+  const showBubbles = document.getElementById("showBubbles");
+  showBubbles.checked = !!settings.showBubbles;
+  showBubbles.onchange = () => {
+    settings.showBubbles = showBubbles.checked;
+    saveSettings();
+    scheduleBubbles(0);
+  };
   document.getElementById("onlySelected").onchange = async () => {
     await ensureSelectionKeys();
     render();
@@ -442,7 +472,10 @@ function openEditor(rec) {
   document.getElementById("todoFields").classList.toggle("hidden", type !== "todo");
   draftObjects = rec ? (rec.objects || []).slice() : [];
   draftCamera = rec ? rec.camera || null : null;
+  draftPin = rec ? rec.pin || null : null;
+  setPickArmed(false);
   renderDraftObjects();
+  renderDraftPin();
   renderPlanItemInfo();
   document.getElementById("btnSave").innerText = rec ? "Spara ändringar" : "Spara";
   document.getElementById("editor").classList.remove("hidden");
@@ -454,6 +487,8 @@ function closeEditor() {
   editingId = null;
   draftObjects = [];
   draftCamera = null;
+  draftPin = null;
+  setPickArmed(false);
   document.getElementById("editor").classList.add("hidden");
   document.getElementById("btnNew").classList.remove("hidden");
 }
@@ -546,6 +581,7 @@ async function onSave() {
     plan_item_id: selectedPlanId(),
     objects: draftObjects.slice(),
     camera,
+    pin: draftPin,
     author: existing ? existing.author : (settings.userName || null),
     created_at: existing ? existing.created_at : now,
     updated_at: now,
@@ -671,10 +707,12 @@ function render() {
   const empty = document.getElementById("emptyHint");
   empty.classList.toggle("hidden", rows.length > 0);
   empty.innerText = items.some(r => r.type === activeTab) ? "Inget matchar filtret." : "Inget här än.";
+  scheduleBubbles();
 }
 
 function renderCard(rec, isSelectedMatch) {
   const li = document.createElement("li");
+  li.dataset.id = rec.id;
   li.className = "card" + (rec.done ? " done" : "") + (isSelectedMatch ? " selected-match" : "");
 
   const head = el("div", "card-head");
@@ -712,6 +750,7 @@ function renderCard(rec, isSelectedMatch) {
   const chips = el("div", "chips");
   if ((rec.objects || []).length) chips.appendChild(chip(objectsSummary(rec.objects)));
   if (rec.camera) chips.appendChild(chip("🎥 Sparad vy"));
+  if (rec.pin) chips.appendChild(chip("📍 Egen bubbelpunkt"));
   if (rec.plan_item_id) {
     const plan = planById.get(String(rec.plan_item_id));
     if (plan) {
@@ -733,6 +772,389 @@ function renderCard(rec, isSelectedMatch) {
   actions.appendChild(iconButton("🗑️", "Radera", () => onDelete(rec)));
   li.appendChild(actions);
   return li;
+}
+
+/* ---------------------------------------------------------------------
+   3D-bubblor
+   ---------------------------------------------------------------------
+   Trimbles text-markups har fast utseende (bara text + en färg). I stället
+   ritas varje bubbla som en egen PNG på en canvas och läggs i 3D-vyn med
+   viewer.addIcon(). Bilden är dubbelt så hög som själva bubblan och spetsen
+   slutar exakt i bildens mitt, så att spetsen pekar på ankarpunkten även om
+   Trimble centrerar ikonen på positionen.
+
+   Ankarpunkt (meter, samma som getObjectBoundingBoxes och PointIcon):
+     1. postens egen punkt (📍), annars
+     2. mitten av ovansidan på de kopplade objektens gemensamma bounding box,
+        annars
+     3. det kopplade 4D-objektet.
+   Poster med samma ankarpunkt slås ihop till en bubbla med "+N".
+   ------------------------------------------------------------------- */
+const bubbleState = {
+  icons: [],                // PointIcon[] som den här extensionen lagt till
+  iconToRecs: new Map(),    // icon-id -> [post-id]
+  nextId: 1,
+  bboxCache: new Map(),     // "modelId|objektId" -> Box3 | null (finns inte i inläst modell)
+  imageCache: new Map(),
+  timer: null,
+  running: false,
+  pending: false,
+};
+
+const BUBBLE_COLORS = { note: "#0b5fff", todo: "#d97706", overdue: "#c62828", done: "#1b7f3b" };
+
+function scheduleBubbles(delay = 300) {
+  clearTimeout(bubbleState.timer);
+  bubbleState.timer = setTimeout(updateBubbles, delay);
+}
+
+async function updateBubbles() {
+  if (!API) return;
+  if (bubbleState.running) {
+    bubbleState.pending = true;
+    return;
+  }
+  bubbleState.running = true;
+  try {
+    const recs = settings.showBubbles ? filteredItems(activeTab) : [];
+    const groups = await groupByAnchor(recs);
+
+    const icons = [];
+    const iconToRecs = new Map();
+    groups.forEach(g => {
+      const id = bubbleState.nextId++;
+      icons.push({ id, iconPath: bubbleImage(g.recs), position: g.pos, size: settings.bubbleSize });
+      iconToRecs.set(id, g.recs.map(r => r.id));
+    });
+
+    if (bubbleState.icons.length) {
+      try {
+        await API.viewer.removeIcon(bubbleState.icons);
+      } catch (e) {
+        console.warn("Kunde inte ta bort gamla bubblor", e);
+      }
+    }
+    bubbleState.icons = icons;
+    bubbleState.iconToRecs = iconToRecs;
+    if (icons.length) await API.viewer.addIcon(icons);
+
+    const placed = groups.reduce((n, g) => n + g.recs.length, 0);
+    setBubbleHint(settings.showBubbles
+      ? (recs.length === 0 ? "" : placed < recs.length
+        ? `${placed} av ${recs.length} poster visas i 3D. Övriga saknar kopplade objekt/punkt, eller så finns objekten inte i den inlästa modellen.`
+        : "")
+      : "");
+  } catch (e) {
+    console.error("Kunde inte visa bubblor i 3D", e);
+    setBubbleHint("Kunde inte visa bubblor i 3D: " + e.message);
+  } finally {
+    bubbleState.running = false;
+    if (bubbleState.pending) {
+      bubbleState.pending = false;
+      scheduleBubbles(0);
+    }
+  }
+}
+
+function setBubbleHint(text) {
+  const h = document.getElementById("bubbleHint");
+  h.innerText = text;
+  h.classList.toggle("hidden", !text);
+}
+
+/** Grupperar poster på gemensam ankarpunkt: [{pos, recs}]. */
+async function groupByAnchor(recs) {
+  const objsByRec = new Map();
+  recs.forEach(rec => {
+    if (rec.pin) return;
+    let objs = rec.objects || [];
+    const plan = rec.plan_item_id ? planById.get(String(rec.plan_item_id)) : null;
+    if (objs.length === 0 && plan && plan.model_id && plan.object_id) {
+      objs = [{ model_id: plan.model_id, object_id: String(plan.object_id) }];
+    }
+    if (objs.length) objsByRec.set(rec.id, objs);
+  });
+  await loadBoundingBoxes([].concat(...objsByRec.values()));
+
+  const groups = new Map();
+  recs.forEach(rec => {
+    let pos = rec.pin || null;
+    if (!pos && objsByRec.has(rec.id)) {
+      const boxes = objsByRec.get(rec.id)
+        .map(o => bubbleState.bboxCache.get(`${o.model_id}|${o.object_id}`))
+        .filter(Boolean);
+      if (boxes.length) {
+        const min = { x: Math.min(...boxes.map(b => b.min.x)), y: Math.min(...boxes.map(b => b.min.y)) };
+        const max = { x: Math.max(...boxes.map(b => b.max.x)), y: Math.max(...boxes.map(b => b.max.y)), z: Math.max(...boxes.map(b => b.max.z)) };
+        pos = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: max.z };
+      }
+    }
+    if (!pos) return;
+    const key = [pos.x, pos.y, pos.z].map(v => Math.round(v * 20)).join(",");
+    if (!groups.has(key)) groups.set(key, { pos: { x: pos.x, y: pos.y, z: pos.z }, recs: [] });
+    groups.get(key).recs.push(rec);
+  });
+  return [...groups.values()];
+}
+
+/** Hämtar bounding boxes för objekt som inte redan finns i cachen. */
+async function loadBoundingBoxes(objs) {
+  const byModel = {};
+  objs.forEach(o => {
+    const key = `${o.model_id}|${o.object_id}`;
+    if (bubbleState.bboxCache.has(key)) return;
+    bubbleState.bboxCache.set(key, null);
+    (byModel[o.model_id] = byModel[o.model_id] || []).push(o.object_id);
+  });
+  for (const modelId of Object.keys(byModel)) {
+    const objectIds = byModel[modelId];
+    const runtimeIds = await convertToRuntimeIdsSafe(modelId, objectIds);
+    const runtimeToObject = new Map();
+    runtimeIds.forEach((rid, i) => { if (rid !== undefined && rid !== null) runtimeToObject.set(rid, objectIds[i]); });
+    if (runtimeToObject.size === 0) continue;
+    try {
+      const boxes = await API.viewer.getObjectBoundingBoxes(modelId, [...runtimeToObject.keys()]);
+      boxes.forEach(b => {
+        const objectId = runtimeToObject.get(b.id);
+        if (objectId !== undefined && b.boundingBox) bubbleState.bboxCache.set(`${modelId}|${objectId}`, b.boundingBox);
+      });
+    } catch (e) {
+      console.warn("Kunde inte läsa objektens position", e);
+    }
+  }
+}
+
+function bubbleKind(rec) {
+  if (rec.type !== "todo") return "note";
+  if (rec.done) return "done";
+  return rec.due_date && rec.due_date < todayIso() ? "overdue" : "todo";
+}
+
+function bubbleImage(recs) {
+  const rec = recs[0];
+  const kind = bubbleKind(rec);
+  if (settings.bubbleSource === "static") {
+    return new URL(`callouts/${kind}.png`, window.location.href).href;
+  }
+  const plan = rec.plan_item_id ? planById.get(String(rec.plan_item_id)) : null;
+  let sub;
+  if (rec.type === "todo") {
+    sub = [
+      rec.done ? "Klar" : rec.due_date ? (kind === "overdue" ? `Försenad · ${rec.due_date}` : `Förfaller ${rec.due_date}`) : "",
+      rec.assignee,
+    ].filter(Boolean).join(" · ");
+  } else {
+    sub = [rec.author, formatDateTime(rec.updated_at || rec.created_at).slice(0, 10)].filter(Boolean).join(" · ");
+  }
+  const spec = {
+    kind,
+    title: rec.title || (rec.body || "").split("\n")[0] || "(utan rubrik)",
+    sub,
+    plan: plan ? [plan.object_name || plan.object_id, STATUS_LABELS[plan.status] || plan.status].filter(Boolean).join(" · ") : "",
+    planLate: !!(plan && plan.status === "forsenad"),
+    more: recs.length - 1,
+  };
+  const key = JSON.stringify(spec);
+  if (!bubbleState.imageCache.has(key)) bubbleState.imageCache.set(key, drawBubble(spec));
+  return bubbleState.imageCache.get(key);
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function fitText(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + "…").width > maxWidth) t = t.slice(0, -1);
+  return t + "…";
+}
+
+/** Ikonsymbol: bock-ruta för att göra, textrader för anteckning. */
+function drawGlyph(ctx, kind, cx, cy, r) {
+  ctx.fillStyle = BUBBLE_COLORS[kind];
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = r * 0.2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  if (kind === "note") {
+    [-0.38, 0, 0.38].forEach((dy, i) => {
+      ctx.moveTo(cx - r * 0.45, cy + dy * r);
+      ctx.lineTo(cx + r * (i === 2 ? 0.15 : 0.45), cy + dy * r);
+    });
+  } else if (kind === "overdue") {
+    ctx.moveTo(cx, cy - r * 0.45);
+    ctx.lineTo(cx, cy + r * 0.1);
+    ctx.moveTo(cx, cy + r * 0.42);
+    ctx.lineTo(cx, cy + r * 0.43);
+  } else {
+    ctx.moveTo(cx - r * 0.4, cy + r * 0.02);
+    ctx.lineTo(cx - r * 0.1, cy + r * 0.32);
+    ctx.lineTo(cx + r * 0.42, cy - r * 0.3);
+  }
+  ctx.stroke();
+}
+
+/** Ritar en callout-bubbla och returnerar den som PNG-data-URL. */
+function drawBubble(spec) {
+  const S = 2;                              // upplösning (retina)
+  const W = 300, pad = 12, tip = 14, radius = 10;
+  const lines = [spec.sub, spec.plan].filter(Boolean);
+  const H = 22 + pad * 2 + lines.length * 18;
+  const canvas = document.createElement("canvas");
+  canvas.width = W * S;
+  canvas.height = (H + tip + 6) * 2 * S;    // bubblan i övre halvan, spetsen i mitten
+  const ctx = canvas.getContext("2d");
+  ctx.scale(S, S);
+  const x = 4, y = canvas.height / S / 2 - tip - H, w = W - 8;
+  const color = BUBBLE_COLORS[spec.kind];
+
+  // Kropp + spets som en form, med skugga
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.28)";
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  roundRect(ctx, x, y, w, H, radius);
+  ctx.moveTo(W / 2 - tip, y + H);
+  ctx.lineTo(W / 2, y + H + tip);
+  ctx.lineTo(W / 2 + tip, y + H);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.restore();
+
+  // Färgad vänsterkant
+  ctx.save();
+  roundRect(ctx, x, y, w, H, radius);
+  ctx.clip();
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, 6, H);
+  ctx.restore();
+
+  // Ram (röd om 4D-objektet är försenat)
+  roundRect(ctx, x, y, w, H, radius);
+  ctx.strokeStyle = spec.planLate ? BUBBLE_COLORS.overdue : "rgba(0,0,0,0.12)";
+  ctx.lineWidth = spec.planLate ? 2 : 1;
+  ctx.stroke();
+
+  const font = '"Segoe UI", Arial, sans-serif';
+  const textX = x + 6 + pad + 26;
+  const badgeW = spec.more > 0 ? 34 : 0;
+  drawGlyph(ctx, spec.kind, x + 6 + pad + 10, y + pad + 11, 11);
+
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#1f2328";
+  ctx.font = `600 16px ${font}`;
+  const title = fitText(ctx, spec.title, x + w - pad - badgeW - textX);
+  ctx.fillText(title, textX, y + pad + 11);
+  if (spec.kind === "done") {
+    ctx.strokeStyle = "#6b7280";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(textX, y + pad + 12);
+    ctx.lineTo(textX + ctx.measureText(title).width, y + pad + 12);
+    ctx.stroke();
+  }
+
+  ctx.font = `13px ${font}`;
+  lines.forEach((line, i) => {
+    const isPlan = line === spec.plan && i === lines.length - 1 && spec.plan;
+    ctx.fillStyle = isPlan ? (spec.planLate ? BUBBLE_COLORS.overdue : BUBBLE_COLORS.done)
+      : spec.kind === "overdue" && i === 0 ? BUBBLE_COLORS.overdue : "#6b7280";
+    ctx.fillText(fitText(ctx, (isPlan ? "4D: " : "") + line, x + w - pad - textX), textX, y + pad + 22 + 9 + i * 18);
+  });
+
+  if (spec.more > 0) {
+    ctx.fillStyle = color;
+    roundRect(ctx, x + w - pad - badgeW + 4, y + pad + 1, badgeW - 4, 20, 10);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.font = `600 12px ${font}`;
+    ctx.textAlign = "center";
+    ctx.fillText(`+${spec.more}`, x + w - pad - badgeW / 2 + 2, y + pad + 11);
+    ctx.textAlign = "left";
+  }
+  return canvas.toDataURL("image/png");
+}
+
+/** Enkel nål-ikon (för "Enkel ikon"-läget; genereras till docs/callouts/*.png). */
+function drawPin(kind) {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size * 2;                 // spetsen i bildens mitt
+  const ctx = canvas.getContext("2d");
+  const cx = size / 2, r = 44, cy = size - 16 - r * 1.35;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.3)";
+  ctx.shadowBlur = 6;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, Math.PI * 0.8, Math.PI * 2.2);
+  ctx.lineTo(cx, size);
+  ctx.closePath();
+  ctx.fillStyle = "#fff";
+  ctx.fill();
+  ctx.restore();
+  drawGlyph(ctx, kind, cx, cy, r - 6);
+  return canvas.toDataURL("image/png");
+}
+
+/** Klick på en bubbla i 3D: visa och markera posten i listan. */
+function onBubblePicked(data) {
+  const icons = Array.isArray(data) ? data : data ? [data] : [];
+  for (const icon of icons) {
+    const recIds = bubbleState.iconToRecs.get(icon && icon.id);
+    if (recIds && recIds.length) {
+      focusRecords(recIds);
+      return;
+    }
+  }
+}
+
+function focusRecords(recIds) {
+  const first = items.find(r => r.id === recIds[0]);
+  if (!first) return;
+  if (first.type !== activeTab) switchTab(first.type);
+  let firstCard = null;
+  recIds.forEach(id => {
+    const card = document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    card.classList.remove("flash");
+    void card.offsetWidth;                  // starta om animationen
+    card.classList.add("flash");
+    firstCard = firstCard || card;
+  });
+  if (firstCard) firstCard.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/* ----- Egen punkt för bubblan (📍) ----- */
+function setPickArmed(on) {
+  pickArmed = on;
+  const btn = document.getElementById("btnPickPoint");
+  btn.classList.toggle("armed", on);
+  btn.innerText = on ? "📍 Klicka i modellen… (avbryt)" : "📍 Välj punkt för 3D-bubbla";
+}
+
+function onPointPicked(detail) {
+  if (!pickArmed || !detail || !detail.position) return;
+  const p = detail.position;
+  draftPin = { x: Number(p.x), y: Number(p.y), z: Number(p.z) };
+  setPickArmed(false);
+  renderDraftPin();
+}
+
+function renderDraftPin() {
+  document.getElementById("fPinInfo").innerText = draftPin ? "✓ Punkt vald" : "";
+  document.getElementById("btnClearPin").classList.toggle("hidden", !draftPin);
 }
 
 /* ---------------------------------------------------------------------

@@ -147,3 +147,7 @@ button.link { border: none; background: none; color: var(--accent); padding: 2px
 
 dialog { border: 1px solid var(--border); border-radius: 8px; width: min(420px, 92vw); }
 dialog h2 { font-size: 15px; margin-top: 0; }
+
+.card.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { 0%, 40% { background: #e8eefc; box-shadow: 0 0 0 2px var(--accent); } 100% { background: #fff; } }
+button.armed { background: var(--warn-bg); border-color: var(--warn-text); }
