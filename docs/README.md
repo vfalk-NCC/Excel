@@ -24,9 +24,17 @@ exporterar allt till Excel eller Markdown. Använder samma datalager som
 
 ## Bubblor i 3D-vyn
 
-Trimbles egna text-markups har fast utseende. Därför ritas varje post som
-en egen bild och läggs i modellen med `viewer.addIcon()`. Kryssa i
-**💬 Visa bubblor i 3D** ovanför listan.
+Kryssa i **💬 Visa bubblor i 3D** ovanför listan. Under ⚙ väljer du
+**Stil på 3D-bubblor**:
+
+- **Skarp text** (standard): en liten färgad nål på objektet och Trimbles
+  egen textetikett med rubrik, datum, ansvarig och 4D-status. Etiketten
+  ritas som text och är skarp i alla zoomlägen, men utseendet är Trimbles
+  eget. Klick på nålen öppnar kortet.
+- **Egen bubbla**: posten ritas som en bild (`viewer.addIcon()`) med eget
+  utseende. Trimble förstorar bilden utan utjämning, så texten kan bli
+  pixlig när du zoomar in. Punkterna nedan om storlek och zoom gäller
+  bara det här läget.
 
 - **Innehåll:** bubblan visar rubrik, datum och ansvarig, eller författare
   för en anteckning, och 4D-status. Färgen följer typ och status: blå för

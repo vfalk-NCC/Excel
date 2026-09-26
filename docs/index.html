@@ -4,10 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Anteckningar & att göra</title>
-<link rel="stylesheet" href="style.css?v=2026-09-26.6" />
+<link rel="stylesheet" href="style.css?v=2026-09-26.7" />
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="github-storage.js?v=2026-09-26.6"></script>
+<script src="github-storage.js?v=2026-09-26.7"></script>
 </head>
 <body>
 <div id="app">
@@ -120,6 +120,13 @@
     <label>GitHub-token för 4D-data
       <input type="password" id="sToken" autocomplete="off" placeholder="github_pat_…" />
     </label>
+    <label>Stil på 3D-bubblor
+      <select id="sBubbleStyle">
+        <option value="text">Skarp text – nål + Trimble-etikett</option>
+        <option value="image">Egen bubbla – bild (kan bli pixlig)</option>
+      </select>
+    </label>
+    <p class="hint">Inställningarna nedan gäller "Egen bubbla".</p>
     <label>Storlek på 3D-bubblor
       <input type="range" id="sBubbleSize" min="64" max="640" step="16" />
     </label>
@@ -138,6 +145,6 @@
   </form>
 </dialog>
 
-<script src="app.js?v=2026-09-26.6"></script>
+<script src="app.js?v=2026-09-26.7"></script>
 </body>
 </html>

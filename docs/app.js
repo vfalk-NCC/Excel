@@ -24,7 +24,7 @@
 // Visas i headern - gör det lätt att se om Trimble kör senaste versionen
 // (GitHub Pages cachar filerna ~10 min). Räkna upp vid varje release och
 // uppdatera ?v= i index.html samtidigt.
-const APP_VERSION = "2026-09-26.6";
+const APP_VERSION = "2026-09-26.7";
 const SETTINGS_KEY = "tcnotes-settings";
 const DEFAULT_BUBBLE_SIZE = 256;
 // 4D-planering hostas på samma origin (vfalk-ncc.github.io), så dess
@@ -44,7 +44,7 @@ const PRIORITY_LABELS = { hog: "Hög", normal: "Normal", lag: "Låg" };
 let API = null;
 let projectId = null;
 let projectName = "";
-let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: DEFAULT_BUBBLE_SIZE, bubbleSource: "generated", bubbleScale: true, bubbleRefDistance: null };
+let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: DEFAULT_BUBBLE_SIZE, bubbleSource: "generated", bubbleScale: true, bubbleRefDistance: null, bubbleStyle: "text" };
 
 let items = [];                 // alla anteckningar + att göra (radformat, snake_case)
 let planItems = [];             // plan_items.json från 4D-planering
@@ -236,6 +236,7 @@ function openSettings() {
   set("sToken", "value", settings.githubToken || "");
   set("sBubbleSize", "value", settings.bubbleSize);
   set("sBubbleSource", "value", settings.bubbleSource);
+  set("sBubbleStyle", "value", settings.bubbleStyle || "text");
   set("sBubbleScale", "checked", settings.bubbleScale !== false);
   const dlg = document.getElementById("settingsDialog");
   dlg.returnValue = "";
@@ -255,6 +256,7 @@ async function onSettingsClosed() {
   settings.githubToken = document.getElementById("sToken").value.trim();
   settings.bubbleSize = Number(document.getElementById("sBubbleSize").value) || DEFAULT_BUBBLE_SIZE;
   settings.bubbleSource = document.getElementById("sBubbleSource").value;
+  settings.bubbleStyle = document.getElementById("sBubbleStyle").value;
   settings.bubbleScale = document.getElementById("sBubbleScale").checked;
   saveSettings();
   updateStorageBadge();
@@ -955,14 +957,18 @@ async function applyBubbleIcons() {
   const ref = settings.bubbleRefDistance;
   const scale = settings.bubbleScale !== false && cam && ref > 0;
 
+  const textMode = settings.bubbleStyle !== "image";
   const specs = bubbleState.groups.map(g => {
+    // Skarp text: liten nål + Trimbles egen textetikett (ritas som text, inte
+    // som bild, och är därför skarp i alla zoomlägen). Nålen skalas inte.
+    if (textMode) return { g, pin: true, size: 48 };
     if (!scale) return { g, pin: false, size: base };
     const f = ref / Math.max(ref / 20, dist(g));
     if (f < 0.6) return { g, pin: true, size: Math.max(32, quantize(base * 0.45)) };
     return { g, pin: false, size: quantize(base * Math.min(1.5, f)) };
   });
 
-  const signature = JSON.stringify([base, settings.bubbleSource, specs.map(sp =>
+  const signature = JSON.stringify([base, settings.bubbleSource, settings.bubbleStyle, specs.map(sp =>
     [sp.g.pos.x, sp.g.pos.y, sp.g.pos.z, sp.pin, sp.size, sp.g.recs.map(r => [r.id, r.updated_at, r.done, (planById.get(String(r.plan_item_id)) || {}).status].join()).join()])]);
   if (signature === bubbleState.signature) return;
 
@@ -988,6 +994,56 @@ async function applyBubbleIcons() {
       console.warn("Kunde inte ta bort gamla bubblor", e);
     }
   }
+  await applyTextLabels(textMode ? bubbleState.groups : []);
+}
+
+/**
+ * Textetiketter (Trimbles markup-API) för läget "Skarp text". Positioner i
+ * markup-API:t anges i millimeter (ikonerna i meter). Etiketten kan inte
+ * klickas - klick på nålen öppnar kortet.
+ */
+async function applyTextLabels(groups) {
+  if (!API.markup) return;
+  const old = bubbleState.markupIds || [];
+  bubbleState.markupIds = [];
+  if (old.length) {
+    try {
+      await API.markup.removeMarkups(old);
+    } catch (e) {
+      console.warn("Kunde inte ta bort gamla etiketter", e);
+    }
+  }
+  if (!groups.length) return;
+  const markups = groups.map(g => {
+    const point = { positionX: g.pos.x * 1000, positionY: g.pos.y * 1000, positionZ: g.pos.z * 1000 };
+    return { text: labelText(g.recs), color: hexToRgba(BUBBLE_COLORS[bubbleKind(g.recs[0])]), start: point, end: point };
+  });
+  const created = await API.markup.addTextMarkup(markups);
+  bubbleState.markupIds = (created || []).map(m => m.id).filter(id => id !== undefined && id !== null);
+}
+
+const LABEL_PREFIX = { note: "📝", todo: "☐", overdue: "⚠", done: "✔" };
+
+function labelText(recs) {
+  const rec = recs[0];
+  const kind = bubbleKind(rec);
+  const title = rec.title || (rec.body || "").split("\n")[0] || "(utan rubrik)";
+  const lines = [`${LABEL_PREFIX[kind]} ${title}${recs.length > 1 ? `  (+${recs.length - 1})` : ""}`];
+  if (rec.type === "todo") {
+    const meta = [
+      rec.done ? "Klar" : rec.due_date ? (kind === "overdue" ? `Försenad ${rec.due_date}` : `Förfaller ${rec.due_date}`) : "",
+      rec.assignee,
+    ].filter(Boolean).join(" · ");
+    if (meta) lines.push(meta);
+  }
+  const plan = rec.plan_item_id ? planById.get(String(rec.plan_item_id)) : null;
+  if (plan) lines.push("4D: " + [plan.object_name || plan.object_id, STATUS_LABELS[plan.status] || plan.status].filter(Boolean).join(" · "));
+  return lines.join("\n");
+}
+
+function hexToRgba(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 255 };
 }
 
 /** Sätter referensavståndet (normalstorlek) till medianavståndet i nuvarande vy. */
@@ -1015,7 +1071,7 @@ function quantize(size) {
 function onCameraChanged(camera) {
   if (!camera || !camera.position) return;
   bubbleState.cameraPos = camera.position;
-  if (!settings.showBubbles || settings.bubbleScale === false || !bubbleState.groups.length) return;
+  if (!settings.showBubbles || settings.bubbleStyle !== "image" || settings.bubbleScale === false || !bubbleState.groups.length) return;
   if (bubbleState.cameraTimer) return;       // max en omräkning per 250 ms
   bubbleState.cameraTimer = setTimeout(async () => {
     bubbleState.cameraTimer = null;
