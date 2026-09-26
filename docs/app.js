@@ -39,7 +39,7 @@ const PRIORITY_LABELS = { hog: "Hög", normal: "Normal", lag: "Låg" };
 let API = null;
 let projectId = null;
 let projectName = "";
-let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: 96, bubbleSource: "generated", bubbleScale: true, bubbleDetailDistance: 60 };
+let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: 96, bubbleSource: "generated", bubbleScale: true, bubbleRefDistance: null };
 
 let items = [];                 // alla anteckningar + att göra (radformat, snake_case)
 let planItems = [];             // plan_items.json från 4D-planering
@@ -178,7 +178,6 @@ function openSettings() {
   document.getElementById("sBubbleSize").value = settings.bubbleSize;
   document.getElementById("sBubbleSource").value = settings.bubbleSource;
   document.getElementById("sBubbleScale").checked = settings.bubbleScale !== false;
-  document.getElementById("sBubbleDetail").value = settings.bubbleDetailDistance;
   const dlg = document.getElementById("settingsDialog");
   dlg.returnValue = "";
   dlg.showModal();
@@ -193,7 +192,6 @@ async function onSettingsClosed() {
   settings.bubbleSize = Number(document.getElementById("sBubbleSize").value) || 96;
   settings.bubbleSource = document.getElementById("sBubbleSource").value;
   settings.bubbleScale = document.getElementById("sBubbleScale").checked;
-  settings.bubbleDetailDistance = Math.max(1, Number(document.getElementById("sBubbleDetail").value) || 60);
   saveSettings();
   updateStorageBadge();
   scheduleBubbles();
@@ -443,8 +441,18 @@ function bindUI() {
   showBubbles.checked = !!settings.showBubbles;
   showBubbles.onchange = () => {
     settings.showBubbles = showBubbles.checked;
+    // Ny normalvy varje gång bubblorna slås på - den vy man står i då är
+    // den man vill läsa dem i.
+    if (showBubbles.checked) settings.bubbleRefDistance = null;
     saveSettings();
     scheduleBubbles(0);
+  };
+  document.getElementById("btnBubbleNormal").onclick = async () => {
+    try {
+      const cam = await API.viewer.getCamera();
+      if (cam && cam.position) bubbleState.cameraPos = cam.position;
+    } catch (e) { /* använd senast kända kameraposition */ }
+    if (!setReferenceDistance()) setBubbleHint("Inga bubblor att anpassa i den här vyn.");
   };
   document.getElementById("onlySelected").onchange = async () => {
     await ensureSelectionKeys();
@@ -859,24 +867,32 @@ async function updateBubbles() {
  * Lägger ut bubblorna för bubbleState.groups. Trimble ritar ikoner med fast
  * storlek på skärmen, så utan åtgärd blir en bubbla enorm i förhållande till
  * modellen när man zoomar ut. Därför räknas storleken om efter kamerans
- * avstånd (krymper när man zoomar ut, som ett riktigt objekt), och längre
- * bort än "detaljavståndet" visas bara en liten nål i stället för hela
- * bubblan. Storleken avrundas i steg så att vi inte ritar om vid varje
- * liten kamerarörelse.
+ * avstånd till bubblan.
+ *
+ * Avståndet jämförs med ett referensavstånd ("normalvyn") i stället för med
+ * fasta meter - då spelar det ingen roll vilken enhet/skala Trimble
+ * rapporterar kamerans position i. Referensen sätts automatiskt från vyn när
+ * bubblorna slås på, och kan sättas om med "Normalstorlek här".
+ *
+ * Blir bubblan för liten för att texten ska gå att läsa (mindre än 60 % av
+ * grundstorleken) visas en liten nål i stället. Storleken avrundas i steg så
+ * att vi inte ritar om vid varje liten kamerarörelse.
  */
 async function applyBubbleIcons() {
   const base = settings.bubbleSize;
-  const refDistance = 25;                   // meter där bubblan har grundstorleken
   const cam = bubbleState.cameraPos;
-  const scale = settings.bubbleScale !== false && cam;
+  const dist = g => Math.hypot(g.pos.x - cam.x, g.pos.y - cam.y, g.pos.z - cam.z);
+  if (cam && bubbleState.groups.length && !(settings.bubbleRefDistance > 0)) {
+    setReferenceDistance(false);
+  }
+  const ref = settings.bubbleRefDistance;
+  const scale = settings.bubbleScale !== false && cam && ref > 0;
 
   const specs = bubbleState.groups.map(g => {
     if (!scale) return { g, pin: false, size: base };
-    const d = Math.max(0.5, Math.hypot(g.pos.x - cam.x, g.pos.y - cam.y, g.pos.z - cam.z));
-    if (d > settings.bubbleDetailDistance) {
-      return { g, pin: true, size: quantize(base * Math.max(0.25, Math.min(0.45, 0.45 * refDistance * 2 / d))) };
-    }
-    return { g, pin: false, size: quantize(base * Math.max(0.35, Math.min(1.5, refDistance / d))) };
+    const f = ref / Math.max(ref / 20, dist(g));
+    if (f < 0.6) return { g, pin: true, size: Math.max(32, quantize(base * 0.45)) };
+    return { g, pin: false, size: quantize(base * Math.min(1.5, f)) };
   });
 
   const signature = JSON.stringify([base, settings.bubbleSource, specs.map(sp =>
@@ -905,6 +921,24 @@ async function applyBubbleIcons() {
       console.warn("Kunde inte ta bort gamla bubblor", e);
     }
   }
+}
+
+/** Sätter referensavståndet (normalstorlek) till medianavståndet i nuvarande vy. */
+function setReferenceDistance(redraw = true) {
+  const cam = bubbleState.cameraPos;
+  if (!cam || !bubbleState.groups.length) return false;
+  const d = bubbleState.groups
+    .map(g => Math.hypot(g.pos.x - cam.x, g.pos.y - cam.y, g.pos.z - cam.z))
+    .sort((a, b) => a - b);
+  const median = d[Math.floor(d.length / 2)];
+  if (!(median > 0)) return false;
+  settings.bubbleRefDistance = median;
+  saveSettings();
+  if (redraw) {
+    bubbleState.signature = "";
+    applyBubbleIcons().catch(e => console.warn(e));
+  }
+  return true;
 }
 
 function quantize(size) {

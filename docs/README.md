@@ -42,9 +42,14 @@ en egen bild och läggs i modellen med `viewer.addIcon()`. Kryssa i
 - **Filter:** bubblorna följer aktiv flik, sökning och filter.
 - **Zoom:** Trimble ritar ikoner med fast storlek på skärmen. Appen räknar
   därför om storleken när kameran flyttas, så att bubblan krymper när du
-  zoomar ut. Längre bort än *Visa hela bubblan inom (meter)* (standard
-  60 m) visas bara en liten färgad nål. Båda går att ändra eller stänga
-  av under ⚙.
+  zoomar ut och växer när du zoomar in (upp till 1,5 gånger).
+  - **Normalvy:** storleken räknas i förhållande till vyn du har när du
+    slår på bubblorna, inte i fasta meter. Det fungerar därför oavsett
+    projektets skala och enhet. **↺ Normalstorlek här** gör den nuvarande
+    vyn till normalvy.
+  - **Nål:** blir bubblan mindre än 60 % av normalstorleken, så att
+    texten inte går att läsa, visas en liten färgad nål i stället.
+  - **Av:** avståndsanpassningen stängs av under ⚙.
 - **Bildformat:** bilderna är kvadratiska (1024 px). Trimble ritar
   ikoner som kvadrater, så en avlång bild trycktes tidigare ihop och gav
   smal, suddig text.
