@@ -116,5 +116,14 @@ Varje ny push till branchen publiceras automatiskt igen. Om `docs/` senare
 flyttas till en annan branch behöver bara Pages-inställningen i steg 1
 pekas om, eftersom manifestets URL är densamma.
 
+**Ny version:** GitHub Pages låter webbläsaren cacha filerna i cirka
+10 minuter. Räkna därför upp `APP_VERSION` i `app.js` och `?v=` i
+`index.html` vid varje ändring, så att Trimble laddar alla filer i samma
+version. Versionen visas i headern bredvid lagringsläget.
+
+**Token:** om GitHub avvisar tokenen (401) provar appen automatiskt
+4D-planeringens token. Fungerar ingen visas en varning om att ange en ny
+under ⚙.
+
 `github-storage.js` är en identisk kopia av filen i 4D-planering och
 4D-dashboard. Uppdatera alla tre samtidigt om den ändras.

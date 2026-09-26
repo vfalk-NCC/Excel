@@ -21,7 +21,12 @@
 //     plan_item_comments.json, så den syns under 💬 i 4D-planering.
 // ---------------------------------------------------------------------
 
+// Visas i headern - gör det lätt att se om Trimble kör senaste versionen
+// (GitHub Pages cachar filerna ~10 min). Räkna upp vid varje release och
+// uppdatera ?v= i index.html samtidigt.
+const APP_VERSION = "2026-09-26.4";
 const SETTINGS_KEY = "tcnotes-settings";
+const DEFAULT_BUBBLE_SIZE = 256;
 // 4D-planering hostas på samma origin (vfalk-ncc.github.io), så dess
 // sparade token går att återanvända utan att användaren klistrar in den igen.
 const PLAN_SETTINGS_KEY = "4dplan-settings";
@@ -39,7 +44,7 @@ const PRIORITY_LABELS = { hog: "Hög", normal: "Normal", lag: "Låg" };
 let API = null;
 let projectId = null;
 let projectName = "";
-let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: 96, bubbleSource: "generated", bubbleScale: true, bubbleRefDistance: null };
+let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: DEFAULT_BUBBLE_SIZE, bubbleSource: "generated", bubbleScale: true, bubbleRefDistance: null };
 
 let items = [];                 // alla anteckningar + att göra (radformat, snake_case)
 let planItems = [];             // plan_items.json från 4D-planering
@@ -64,6 +69,7 @@ let selectionKeysDirty = true;
 window.addEventListener("DOMContentLoaded", initApp);
 
 async function initApp() {
+  document.getElementById("versionBadge").innerText = "v" + APP_VERSION;
   loadSettings();
   bindUI();
   switchTab("note");
@@ -89,12 +95,18 @@ async function refreshAll() {
   btn.disabled = true;
   btn.classList.add("spinning");
   try {
-    await Promise.all([loadItems(), loadPlanItems()]);
+    // Oberoende av varandra: ett fel på 4D-planeringens data ska inte
+    // hindra anteckningarna från att visas.
+    const [notesRes, planRes] = await Promise.allSettled([loadItems(), loadPlanItems()]);
     buildPlanItemOptions();
     render();
-  } catch (e) {
-    console.error(e);
-    showWarning("⚠️ Kunde inte hämta data: " + e.message);
+    const failed = [notesRes, planRes].find(r => r.status === "rejected");
+    if (failed) {
+      console.error(failed.reason);
+      showWarning("⚠️ Kunde inte hämta data: " + failed.reason.message);
+    } else {
+      updateStorageBadge();
+    }
   } finally {
     btn.disabled = false;
     btn.classList.remove("spinning");
@@ -127,6 +139,11 @@ function loadSettings() {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (raw) settings = { ...settings, ...JSON.parse(raw) };
   } catch (e) { /* ignorera */ }
+  // Tidigare standardstorlek (96) gav oläsligt små bubblor i Trimble.
+  if (!settings.bubbleSizeV2) {
+    settings.bubbleSize = DEFAULT_BUBBLE_SIZE;
+    settings.bubbleSizeV2 = true;
+  }
   if (!settings.userName) {
     const plan = readPlanSettings();
     if (plan.userName) settings.userName = plan.userName;
@@ -148,11 +165,48 @@ function readPlanSettings() {
 }
 
 /** Egen token i första hand, annars 4D-planeringens. null = lokalt läge. */
+// Token:ar som GitHub svarat 401 (ogiltig/utgången) på i den här sessionen.
+const rejectedTokens = new Set();
+
+/**
+ * Egen token i första hand, annars 4D-planeringens. En token som GitHub
+ * avvisat hoppas över, så att t.ex. en gammal egen token inte blockerar när
+ * 4D-planeringens fungerar. Är alla avvisade returneras den första ändå,
+ * markerad `invalid` (appen ska inte tyst byta till lokalt läge).
+ * null = ingen token alls = lokalt läge.
+ */
 function resolveToken() {
-  if (settings.githubToken) return { token: settings.githubToken, source: "egen" };
+  const candidates = [];
+  if (settings.githubToken) candidates.push({ token: settings.githubToken, source: "egen" });
   const planToken = readPlanSettings().githubToken;
-  if (planToken) return { token: planToken, source: "4D-planering" };
-  return null;
+  if (planToken && planToken !== settings.githubToken) candidates.push({ token: planToken, source: "4D-planering" });
+  if (!candidates.length) return null;
+  return candidates.find(c => !rejectedTokens.has(c.token)) || { ...candidates[0], invalid: true };
+}
+
+function isAuthError(e) {
+  return /\b401\b/.test(String(e && e.message));
+}
+
+/** Kör fn(token) och provar nästa token om GitHub svarar 401. */
+async function withToken(fn) {
+  for (;;) {
+    const t = resolveToken();
+    if (!t) throw new Error("Ingen GitHub-token.");
+    try {
+      return await fn(t.token);
+    } catch (e) {
+      if (!isAuthError(e) || t.invalid) {
+        if (isAuthError(e)) {
+          updateStorageBadge();
+          throw new Error("GitHub-token är ogiltig eller har gått ut (401). Ange en ny token under ⚙ (samma som i 4D-planering).");
+        }
+        throw e;
+      }
+      rejectedTokens.add(t.token);
+      updateStorageBadge();
+    }
+  }
 }
 
 function token() {
@@ -163,7 +217,10 @@ function token() {
 function updateStorageBadge() {
   const badge = document.getElementById("storageBadge");
   const t = resolveToken();
-  if (t) {
+  if (t && t.invalid) {
+    badge.innerText = "Delad lagring – token ogiltig";
+    showWarning("⚠️ GitHub-token är ogiltig eller har gått ut (401). Klicka ⚙ och ange en ny token (samma som i 4D-planering).");
+  } else if (t) {
     badge.innerText = `Delad lagring (4D-data)${t.source === "4D-planering" ? " · token från 4D-planering" : ""}`;
     hideWarning();
   } else {
@@ -173,29 +230,36 @@ function updateStorageBadge() {
 }
 
 function openSettings() {
-  document.getElementById("sUserName").value = settings.userName || "";
-  document.getElementById("sToken").value = settings.githubToken || "";
-  document.getElementById("sBubbleSize").value = settings.bubbleSize;
-  document.getElementById("sBubbleSource").value = settings.bubbleSource;
-  document.getElementById("sBubbleScale").checked = settings.bubbleScale !== false;
+  // Tålig mot saknade fält, så att dialogen alltid öppnas.
+  const set = (id, prop, value) => { const el = document.getElementById(id); if (el) el[prop] = value; };
+  set("sUserName", "value", settings.userName || "");
+  set("sToken", "value", settings.githubToken || "");
+  set("sBubbleSize", "value", settings.bubbleSize);
+  set("sBubbleSource", "value", settings.bubbleSource);
+  set("sBubbleScale", "checked", settings.bubbleScale !== false);
   const dlg = document.getElementById("settingsDialog");
   dlg.returnValue = "";
-  dlg.showModal();
+  try {
+    dlg.showModal();
+  } catch (e) {
+    dlg.setAttribute("open", "");
+  }
 }
 
 async function onSettingsClosed() {
   const dlg = document.getElementById("settingsDialog");
   if (dlg.returnValue !== "save") return;
   const hadToken = token();
+  rejectedTokens.clear();
   settings.userName = document.getElementById("sUserName").value.trim();
   settings.githubToken = document.getElementById("sToken").value.trim();
-  settings.bubbleSize = Number(document.getElementById("sBubbleSize").value) || 96;
+  settings.bubbleSize = Number(document.getElementById("sBubbleSize").value) || DEFAULT_BUBBLE_SIZE;
   settings.bubbleSource = document.getElementById("sBubbleSource").value;
   settings.bubbleScale = document.getElementById("sBubbleScale").checked;
   saveSettings();
   updateStorageBadge();
   scheduleBubbles();
-  if (hadToken !== token() && projectId) await refreshAll();
+  if (projectId) await refreshAll();
 }
 
 /* ---------------------------------------------------------------------
@@ -211,7 +275,7 @@ function localKey() {
 async function loadItems() {
   const t = token();
   if (t) {
-    items = await ghReadJSON(t, projectPath("field_notes.json"));
+    items = await withToken(tok => ghReadJSON(tok, projectPath("field_notes.json")));
   } else {
     try {
       items = JSON.parse(window.localStorage.getItem(localKey()) || "[]");
@@ -236,7 +300,7 @@ async function persist(mutateFn, message) {
   }
   setSaveStatus("Sparar…");
   try {
-    items = await ghWriteJSON(t, projectPath("field_notes.json"), mutateFn, message);
+    items = await withToken(tok => ghWriteJSON(tok, projectPath("field_notes.json"), mutateFn, message));
     setSaveStatus("");
     render();
   } catch (e) {
@@ -249,8 +313,11 @@ async function persist(mutateFn, message) {
 }
 
 async function loadPlanItems() {
-  const t = token();
-  planItems = t ? await ghReadJSON(t, projectPath("plan_items.json")) : [];
+  planItems = [];
+  planById = new Map();
+  planByObjectId = new Map();
+  if (!token()) return;
+  planItems = await withToken(tok => ghReadJSON(tok, projectPath("plan_items.json")));
   planById = new Map(planItems.map(p => [String(p.id), p]));
   planByObjectId = new Map(planItems.filter(p => p.object_id).map(p => [String(p.object_id), p]));
 }
@@ -653,7 +720,7 @@ async function onSendTo4D(rec) {
       author: settings.userName || rec.author || "Anonym",
       body: lines.join("\n"),
     };
-    await ghWriteJSON(t, projectPath("plan_item_comments.json"), arr => [...arr, comment], "Ny kommentar (från Anteckningar)");
+    await withToken(tok => ghWriteJSON(tok, projectPath("plan_item_comments.json"), arr => [...arr, comment], "Ny kommentar (från Anteckningar)"));
     setSaveStatus("");
     await persist(
       arr => arr.map(r => r.id === rec.id ? { ...r, sent_to_4d_at: comment.created_at } : r),

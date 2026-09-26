@@ -4,10 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Anteckningar & att göra</title>
-<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="style.css?v=2026-09-26.4" />
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="github-storage.js"></script>
+<script src="github-storage.js?v=2026-09-26.4"></script>
 </head>
 <body>
 <div id="app">
@@ -15,7 +15,7 @@
   <header>
     <div class="header-titles">
       <h1>Anteckningar &amp; att göra</h1>
-      <span class="sub" id="storageBadge">Ansluter…</span>
+      <span class="sub"><span id="storageBadge">Ansluter…</span> · <span id="versionBadge"></span></span>
     </div>
     <div class="header-actions">
       <button id="btnRefresh" title="Hämta senaste data">↻</button>
@@ -121,7 +121,7 @@
       <input type="password" id="sToken" autocomplete="off" placeholder="github_pat_…" />
     </label>
     <label>Storlek på 3D-bubblor
-      <input type="range" id="sBubbleSize" min="16" max="256" step="8" />
+      <input type="range" id="sBubbleSize" min="64" max="640" step="16" />
     </label>
     <label class="check"><input type="checkbox" id="sBubbleScale" /> Anpassa bubblornas storlek efter avstånd</label>
     <label>Bild för 3D-bubblor
@@ -138,6 +138,6 @@
   </form>
 </dialog>
 
-<script src="app.js"></script>
+<script src="app.js?v=2026-09-26.4"></script>
 </body>
 </html>
