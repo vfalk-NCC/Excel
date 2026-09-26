@@ -62,12 +62,23 @@ avstängd.
 
 ## Publicera och installera
 
-1. Repots **Settings → Pages**: *Deploy from a branch*, branch `main`,
-   mapp `/docs`.
-2. I Trimble Connect: projektets **Inställningar → Extensions → Lägg
-   till** och ange manifestet
+Excel-repot har ingen `main`-branch, så GitHub Pages publiceras direkt från
+den branch där `docs/` ligger:
+
+1. Repots **Settings → Pages → Build and deployment**: välj *Deploy from a
+   branch*, branch `claude/trimble-connect-app-is9ocn` och mapp `/docs`,
+   och klicka **Save**. Efter någon minut svarar
    `https://vfalk-ncc.github.io/Excel/manifest.json`.
-3. Aktivera extensionen och öppna den från 3D-visarens sidopanel.
+2. I Trimble Connect for Browser: öppna projektet och gå till
+   **Inställningar → Extensions → Lägg till**. Klistra in
+   `https://vfalk-ncc.github.io/Excel/manifest.json` och aktivera
+   extensionen.
+3. Öppna en modell i 3D-visaren. Extensionen finns i sidopanelen som
+   "Anteckningar & att göra".
+
+Varje ny push till branchen publiceras automatiskt igen. Om `docs/` senare
+flyttas till en annan branch behöver bara Pages-inställningen i steg 1
+pekas om, eftersom manifestets URL är densamma.
 
 `github-storage.js` är en identisk kopia av filen i 4D-planering och
 4D-dashboard. Uppdatera alla tre samtidigt om den ändras.
