@@ -24,7 +24,7 @@
 // Visas i headern - gör det lätt att se om Trimble kör senaste versionen
 // (GitHub Pages cachar filerna ~10 min). Räkna upp vid varje release och
 // uppdatera ?v= i index.html samtidigt.
-const APP_VERSION = "2026-09-26.5";
+const APP_VERSION = "2026-09-26.6";
 const SETTINGS_KEY = "tcnotes-settings";
 const DEFAULT_BUBBLE_SIZE = 256;
 // 4D-planering hostas på samma origin (vfalk-ncc.github.io), så dess
@@ -1174,6 +1174,30 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+/** Radbryter text på ord, max `maxLines` rader (sista raden kortas med …). */
+function wrapText(font, text, maxWidth, maxLines) {
+  const ctx = document.createElement("canvas").getContext("2d");
+  ctx.font = font;
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const out = [];
+  let line = "";
+  for (let i = 0; i < words.length; i++) {
+    const test = line ? line + " " + words[i] : words[i];
+    if (ctx.measureText(test).width <= maxWidth || !line) {
+      line = test;
+      continue;
+    }
+    if (out.length === maxLines - 1) {
+      line = words.slice(i - line.split(" ").length, words.length).join(" ");
+      break;
+    }
+    out.push(line);
+    line = words[i];
+  }
+  out.push(fitText(ctx, line, maxWidth));
+  return out;
+}
+
 function fitText(ctx, text, maxWidth) {
   if (ctx.measureText(text).width <= maxWidth) return text;
   let t = text;
@@ -1211,16 +1235,35 @@ function drawGlyph(ctx, kind, cx, cy, r) {
 }
 
 /** Ritar en callout-bubbla och returnerar den som PNG-data-URL. */
+/** Texturstorlek för en bubbla som visas i `size`: ~1,5x, som tvåpotens, 256-2048 px. */
+function bubbleTextureSize(size) {
+  const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  const target = (size || DEFAULT_BUBBLE_SIZE) * dpr * 1.5;
+  let px = 256;
+  while (px < target && px < 2048) px *= 2;
+  return px;
+}
+
 function drawBubble(spec, sizeTag) {
   // Trimble ritar ikoner som kvadrater - en icke-kvadratisk bild trycks ihop
-  // (smal, suddig text). Därför en kvadratisk canvas i hög upplösning
-  // (1024 px, en tvåpotens så att texturen inte skalas om), med bubblan i
-  // övre halvan och spetsen exakt i mitten, på ankarpunkten.
-  const PX = 1024, W = 300;
+  // (smal text). Därför en kvadratisk canvas med bubblan i övre halvan och
+  // spetsen exakt i mitten, på ankarpunkten.
+  //
+  // Upplösningen anpassas till visningsstorleken: en mycket större bild än
+  // den visas i skalas ner av 3D-motorn utan utjämning, och då hackas texten
+  // sönder (oläslig). Runt 1,5x visningsstorleken ger skarp text, avrundat
+  // till en tvåpotens (säkrast för WebGL-texturer).
+  const PX = bubbleTextureSize(sizeTag);
+  const W = 300;
   const S = PX / W;
   const pad = 12, tip = 14, radius = 10;
+  const TITLE = 26, LINE = 21;              // radhöjder (logiska enheter)
   const lines = [spec.sub, spec.plan].filter(Boolean);
-  const H = 22 + pad * 2 + lines.length * 18;
+  const titleFont = '700 20px "Segoe UI", Arial, sans-serif';
+  const badgeW = spec.more > 0 ? 38 : 0;
+  const textLeft = 4 + 6 + pad + 28;
+  const titleLines = wrapText(titleFont, spec.title, (W - 4) - pad - badgeW - textLeft, 2);
+  const H = pad * 2 + TITLE * titleLines.length + lines.length * LINE;
   const canvas = document.createElement("canvas");
   canvas.width = PX;
   canvas.height = PX;
@@ -1257,40 +1300,43 @@ function drawBubble(spec, sizeTag) {
   ctx.stroke();
 
   const font = '"Segoe UI", Arial, sans-serif';
-  const textX = x + 6 + pad + 26;
-  const badgeW = spec.more > 0 ? 34 : 0;
-  drawGlyph(ctx, spec.kind, x + 6 + pad + 10, y + pad + 11, 11);
+  const textX = textLeft;
+  const titleY = y + pad + TITLE / 2;
+  drawGlyph(ctx, spec.kind, x + 6 + pad + 11, titleY, 12);
 
+  // Stora, feta typsnitt och full kontrast - bubblan visas ofta liten.
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#111827";
-  ctx.font = `700 16px ${font}`;
-  const title = fitText(ctx, spec.title, x + w - pad - badgeW - textX);
-  ctx.fillText(title, textX, y + pad + 11);
-  if (spec.kind === "done") {
-    ctx.strokeStyle = "#6b7280";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(textX, y + pad + 12);
-    ctx.lineTo(textX + ctx.measureText(title).width, y + pad + 12);
-    ctx.stroke();
-  }
+  ctx.fillStyle = "#000000";
+  ctx.font = titleFont;
+  titleLines.forEach((t, i) => {
+    const ty = titleY + i * TITLE;
+    ctx.fillText(t, textX, ty);
+    if (spec.kind === "done") {
+      ctx.strokeStyle = "#4b5563";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(textX, ty + 1);
+      ctx.lineTo(textX + ctx.measureText(t).width, ty + 1);
+      ctx.stroke();
+    }
+  });
 
-  ctx.font = `600 13px ${font}`;
+  ctx.font = `600 16px ${font}`;
   lines.forEach((line, i) => {
     const isPlan = line === spec.plan && i === lines.length - 1 && spec.plan;
-    ctx.fillStyle = isPlan ? (spec.planLate ? BUBBLE_COLORS.overdue : BUBBLE_COLORS.done)
-      : spec.kind === "overdue" && i === 0 ? BUBBLE_COLORS.overdue : "#374151";
-    ctx.fillText(fitText(ctx, (isPlan ? "4D: " : "") + line, x + w - pad - textX), textX, y + pad + 22 + 9 + i * 18);
+    ctx.fillStyle = isPlan ? (spec.planLate ? "#b71c1c" : "#14532d")
+      : spec.kind === "overdue" && i === 0 ? "#b71c1c" : "#1f2937";
+    ctx.fillText(fitText(ctx, (isPlan ? "4D: " : "") + line, x + w - pad - textX), textX, y + pad + TITLE * titleLines.length + LINE / 2 + i * LINE);
   });
 
   if (spec.more > 0) {
     ctx.fillStyle = color;
-    roundRect(ctx, x + w - pad - badgeW + 4, y + pad + 1, badgeW - 4, 20, 10);
+    roundRect(ctx, x + w - pad - badgeW + 4, titleY - 12, badgeW - 4, 24, 12);
     ctx.fill();
     ctx.fillStyle = "#fff";
-    ctx.font = `600 12px ${font}`;
+    ctx.font = `700 15px ${font}`;
     ctx.textAlign = "center";
-    ctx.fillText(`+${spec.more}`, x + w - pad - badgeW / 2 + 2, y + pad + 11);
+    ctx.fillText(`+${spec.more}`, x + w - pad - badgeW / 2 + 2, titleY);
     ctx.textAlign = "left";
   }
   if (sizeTag) markSize(canvas, sizeTag);
