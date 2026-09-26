@@ -30,7 +30,10 @@ Kryssa i **💬 Visa bubblor i 3D** ovanför listan. Under ⚙ väljer du
 - **Skarp text** (standard): en liten färgad nål på objektet och Trimbles
   egen textetikett med rubrik, datum, ansvarig och 4D-status. Etiketten
   ritas som text och är skarp i alla zoomlägen, men utseendet är Trimbles
-  eget. Klick på nålen öppnar kortet.
+  eget. Etiketten lyfts en bit ovanför objektet (0,5-3 m beroende på
+  objektets storlek). En färgad ledarlinje och ett litet kryss, ritade
+  som vektorlinjer (`markup.addLineMarkups`), visar vilket objekt den
+  gäller. Klick på nålen öppnar kortet.
 - **Egen bubbla**: posten ritas som en bild (`viewer.addIcon()`) med eget
   utseende. Trimble förstorar bilden utan utjämning, så texten kan bli
   pixlig när du zoomar in. Punkterna nedan om storlek och zoom gäller

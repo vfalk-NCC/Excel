@@ -24,7 +24,7 @@
 // Visas i headern - gör det lätt att se om Trimble kör senaste versionen
 // (GitHub Pages cachar filerna ~10 min). Räkna upp vid varje release och
 // uppdatera ?v= i index.html samtidigt.
-const APP_VERSION = "2026-09-26.7";
+const APP_VERSION = "2026-09-26.8";
 const SETTINGS_KEY = "tcnotes-settings";
 const DEFAULT_BUBBLE_SIZE = 256;
 // 4D-planering hostas på samma origin (vfalk-ncc.github.io), så dess
@@ -998,9 +998,14 @@ async function applyBubbleIcons() {
 }
 
 /**
- * Textetiketter (Trimbles markup-API) för läget "Skarp text". Positioner i
- * markup-API:t anges i millimeter (ikonerna i meter). Etiketten kan inte
- * klickas - klick på nålen öppnar kortet.
+ * Textetiketter för läget "Skarp text": Trimbles egen textetikett
+ * (markup.addTextMarkup) plus vektorlinjer (markup.addLineMarkups) - en
+ * färgad ledarlinje från objektets ovansida upp till etiketten och ett
+ * litet kryss vid objektet. Både text och linjer ritas som vektorer och är
+ * skarpa i alla zoomlägen (samma teknik som guiderna i ritningssnabbtitten).
+ *
+ * Markup-API:t tar positioner i millimeter (ikonerna i meter). Etiketten
+ * kan inte klickas - klick på nålen öppnar kortet.
  */
 async function applyTextLabels(groups) {
   if (!API.markup) return;
@@ -1014,12 +1019,34 @@ async function applyTextLabels(groups) {
     }
   }
   if (!groups.length) return;
-  const markups = groups.map(g => {
-    const point = { positionX: g.pos.x * 1000, positionY: g.pos.y * 1000, positionZ: g.pos.z * 1000 };
-    return { text: labelText(g.recs), color: hexToRgba(BUBBLE_COLORS[bubbleKind(g.recs[0])]), start: point, end: point };
+
+  const toMm = p => ({ positionX: p.x * 1000, positionY: p.y * 1000, positionZ: p.z * 1000 });
+  const texts = [];
+  const lines = [];
+  groups.forEach(g => {
+    const color = hexToRgba(BUBBLE_COLORS[bubbleKind(g.recs[0])]);
+    // Lyft etiketten ovanför objektet: en fjärdedel av objektets storlek,
+    // 0,5-3 m (1 m för egna punkter utan objekt).
+    const lift = g.size ? Math.min(3, Math.max(0.5, g.size * 0.25)) : 1;
+    const top = { x: g.pos.x, y: g.pos.y, z: g.pos.z + lift };
+    texts.push({ text: labelText(g.recs), color, start: toMm(top), end: toMm(top) });
+    lines.push({ start: toMm(g.pos), end: toMm(top), color });
+    const c = Math.min(0.3, lift * 0.2);    // kryss vid objektet
+    lines.push({ start: toMm({ x: g.pos.x - c, y: g.pos.y, z: g.pos.z }), end: toMm({ x: g.pos.x + c, y: g.pos.y, z: g.pos.z }), color });
+    lines.push({ start: toMm({ x: g.pos.x, y: g.pos.y - c, z: g.pos.z }), end: toMm({ x: g.pos.x, y: g.pos.y + c, z: g.pos.z }), color });
   });
-  const created = await API.markup.addTextMarkup(markups);
-  bubbleState.markupIds = (created || []).map(m => m.id).filter(id => id !== undefined && id !== null);
+
+  const ids = [];
+  const collect = created => (created || []).forEach(m => { if (m && m.id !== undefined && m.id !== null) ids.push(m.id); });
+  if (API.markup.addLineMarkups) {
+    try {
+      collect(await API.markup.addLineMarkups(lines));
+    } catch (e) {
+      console.warn("Kunde inte rita ledarlinjer", e);
+    }
+  }
+  collect(await API.markup.addTextMarkup(texts));
+  bubbleState.markupIds = ids;
 }
 
 const LABEL_PREFIX = { note: "📝", todo: "☐", overdue: "⚠", done: "✔" };
@@ -1107,19 +1134,21 @@ async function groupByAnchor(recs) {
   const groups = new Map();
   recs.forEach(rec => {
     let pos = rec.pin || null;
+    let size = null;                        // objektens storlek (m) - styr hur högt etiketten lyfts
     if (!pos && objsByRec.has(rec.id)) {
       const boxes = objsByRec.get(rec.id)
         .map(o => bubbleState.bboxCache.get(`${o.model_id}|${o.object_id}`))
         .filter(Boolean);
       if (boxes.length) {
-        const min = { x: Math.min(...boxes.map(b => b.min.x)), y: Math.min(...boxes.map(b => b.min.y)) };
+        const min = { x: Math.min(...boxes.map(b => b.min.x)), y: Math.min(...boxes.map(b => b.min.y)), z: Math.min(...boxes.map(b => b.min.z)) };
         const max = { x: Math.max(...boxes.map(b => b.max.x)), y: Math.max(...boxes.map(b => b.max.y)), z: Math.max(...boxes.map(b => b.max.z)) };
         pos = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: max.z };
+        size = Math.max(max.x - min.x, max.y - min.y, max.z - min.z);
       }
     }
     if (!pos) return;
     const key = [pos.x, pos.y, pos.z].map(v => Math.round(v * 20)).join(",");
-    if (!groups.has(key)) groups.set(key, { pos: { x: pos.x, y: pos.y, z: pos.z }, recs: [] });
+    if (!groups.has(key)) groups.set(key, { pos: { x: pos.x, y: pos.y, z: pos.z }, size, recs: [] });
     groups.get(key).recs.push(rec);
   });
   return [...groups.values()];
