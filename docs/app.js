@@ -24,7 +24,7 @@
 // Visas i headern - gör det lätt att se om Trimble kör senaste versionen
 // (GitHub Pages cachar filerna ~10 min). Räkna upp vid varje release och
 // uppdatera ?v= i index.html samtidigt.
-const APP_VERSION = "2026-09-26.4";
+const APP_VERSION = "2026-09-26.5";
 const SETTINGS_KEY = "tcnotes-settings";
 const DEFAULT_BUBBLE_SIZE = 256;
 // 4D-planering hostas på samma origin (vfalk-ncc.github.io), så dess
@@ -970,7 +970,7 @@ async function applyBubbleIcons() {
   const iconToRecs = new Map();
   specs.forEach(sp => {
     const id = bubbleState.nextId++;
-    const iconPath = sp.pin ? pinImage(sp.g.recs) : bubbleImage(sp.g.recs);
+    const iconPath = sp.pin ? pinImage(sp.g.recs, sp.size) : bubbleImage(sp.g.recs, sp.size);
     icons.push({ id, iconPath, position: sp.g.pos, size: sp.size });
     iconToRecs.set(id, sp.g.recs.map(r => r.id));
   });
@@ -1102,11 +1102,38 @@ function bubbleKind(rec) {
   return rec.due_date && rec.due_date < todayIso() ? "overdue" : "todo";
 }
 
-function bubbleImage(recs) {
+/**
+ * Trimble verkar cacha ikonen per bildadress (iconPath) - inklusive dess
+ * storlek. Samma bild med ny storlek visades därför med ny storlek i ett
+ * ögonblick och föll sedan tillbaka till den gamla. Varje storlek får därför
+ * en egen, unik bildadress (se sizeTag/markSize).
+ */
+function cachedImage(key, draw) {
+  const cache = bubbleState.imageCache;
+  if (!cache.has(key)) {
+    if (cache.size > 300) cache.clear();    // ~100 kB per bild - håll minnet nere
+    cache.set(key, draw());
+  }
+  return cache.get(key);
+}
+
+function staticIconUrl(kind, size) {
+  return new URL(`callouts/${kind}.png?s=${size}`, window.location.href).href;
+}
+
+/** Ritar en nästan osynlig pixel vars position beror på storleken -> unik bild per storlek. */
+function markSize(canvas, size) {
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "rgba(0,0,0,0.004)";
+  ctx.fillRect(size % canvas.width, canvas.height - 1 - Math.floor(size / canvas.width) % 4, 1, 1);
+}
+
+function bubbleImage(recs, size) {
   const rec = recs[0];
   const kind = bubbleKind(rec);
   if (settings.bubbleSource === "static") {
-    return new URL(`callouts/${kind}.png`, window.location.href).href;
+    return staticIconUrl(kind, size);
   }
   const plan = rec.plan_item_id ? planById.get(String(rec.plan_item_id)) : null;
   let sub;
@@ -1126,19 +1153,15 @@ function bubbleImage(recs) {
     planLate: !!(plan && plan.status === "forsenad"),
     more: recs.length - 1,
   };
-  const key = JSON.stringify(spec);
-  if (!bubbleState.imageCache.has(key)) bubbleState.imageCache.set(key, drawBubble(spec));
-  return bubbleState.imageCache.get(key);
+  return cachedImage(JSON.stringify([spec, size]), () => drawBubble(spec, size));
 }
 
-function pinImage(recs) {
+function pinImage(recs, size) {
   const kind = bubbleKind(recs[0]);
   if (settings.bubbleSource === "static") {
-    return new URL(`callouts/${kind}.png`, window.location.href).href;
+    return staticIconUrl(kind, size);
   }
-  const key = "pin:" + kind;
-  if (!bubbleState.imageCache.has(key)) bubbleState.imageCache.set(key, drawPin(kind));
-  return bubbleState.imageCache.get(key);
+  return cachedImage(`pin:${kind}:${size}`, () => drawPin(kind, size));
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -1188,7 +1211,7 @@ function drawGlyph(ctx, kind, cx, cy, r) {
 }
 
 /** Ritar en callout-bubbla och returnerar den som PNG-data-URL. */
-function drawBubble(spec) {
+function drawBubble(spec, sizeTag) {
   // Trimble ritar ikoner som kvadrater - en icke-kvadratisk bild trycks ihop
   // (smal, suddig text). Därför en kvadratisk canvas i hög upplösning
   // (1024 px, en tvåpotens så att texturen inte skalas om), med bubblan i
@@ -1270,11 +1293,12 @@ function drawBubble(spec) {
     ctx.fillText(`+${spec.more}`, x + w - pad - badgeW / 2 + 2, y + pad + 11);
     ctx.textAlign = "left";
   }
+  if (sizeTag) markSize(canvas, sizeTag);
   return canvas.toDataURL("image/png");
 }
 
 /** Enkel nål-ikon (för "Enkel ikon"-läget; genereras till docs/callouts/*.png). */
-function drawPin(kind) {
+function drawPin(kind, sizeTag) {
   const size = 256;                         // kvadratisk, se drawBubble
   const canvas = document.createElement("canvas");
   canvas.width = size;
@@ -1292,6 +1316,7 @@ function drawPin(kind) {
   ctx.fill();
   ctx.restore();
   drawGlyph(ctx, kind, cx, cy, r - 6);
+  if (sizeTag) markSize(canvas, sizeTag);
   return canvas.toDataURL("image/png");
 }
 
