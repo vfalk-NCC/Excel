@@ -40,6 +40,14 @@ en egen bild och läggs i modellen med `viewer.addIcon()`. Kryssa i
 - **Klick:** klickar du på en bubbla i 3D visas och markeras motsvarande
   kort i panelen.
 - **Filter:** bubblorna följer aktiv flik, sökning och filter.
+- **Zoom:** Trimble ritar ikoner med fast storlek på skärmen. Appen räknar
+  därför om storleken när kameran flyttas, så att bubblan krymper när du
+  zoomar ut. Längre bort än *Visa hela bubblan inom (meter)* (standard
+  60 m) visas bara en liten färgad nål. Båda går att ändra eller stänga
+  av under ⚙.
+- **Bildformat:** bilderna är kvadratiska (1024 px). Trimble ritar
+  ikoner som kvadrater, så en avlång bild trycktes tidigare ihop och gav
+  smal, suddig text.
 - **Storlek och bild** ställs in under ⚙. Syns inga bubblor, välj *Enkel
   ikon*. Då används färdiga bilder från `callouts/` på GitHub Pages i
   stället för genererade bilder.

@@ -39,7 +39,7 @@ const PRIORITY_LABELS = { hog: "Hög", normal: "Normal", lag: "Låg" };
 let API = null;
 let projectId = null;
 let projectName = "";
-let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: 96, bubbleSource: "generated" };
+let settings = { userName: "", githubToken: "", showBubbles: false, bubbleSize: 96, bubbleSource: "generated", bubbleScale: true, bubbleDetailDistance: 60 };
 
 let items = [];                 // alla anteckningar + att göra (radformat, snake_case)
 let planItems = [];             // plan_items.json från 4D-planering
@@ -108,6 +108,8 @@ function onWorkspaceEvent(event, arg) {
     onSelectionChanged();
   } else if (event === "viewer.onPicked") {
     onPointPicked(data);
+  } else if (event === "viewer.onCameraChanged") {
+    onCameraChanged(data);
   } else if (event === "viewer.onIconPicked") {
     onBubblePicked(data);
   } else if (event === "viewer.onModelStateChanged" || event === "viewer.onModelReset") {
@@ -175,6 +177,8 @@ function openSettings() {
   document.getElementById("sToken").value = settings.githubToken || "";
   document.getElementById("sBubbleSize").value = settings.bubbleSize;
   document.getElementById("sBubbleSource").value = settings.bubbleSource;
+  document.getElementById("sBubbleScale").checked = settings.bubbleScale !== false;
+  document.getElementById("sBubbleDetail").value = settings.bubbleDetailDistance;
   const dlg = document.getElementById("settingsDialog");
   dlg.returnValue = "";
   dlg.showModal();
@@ -188,6 +192,8 @@ async function onSettingsClosed() {
   settings.githubToken = document.getElementById("sToken").value.trim();
   settings.bubbleSize = Number(document.getElementById("sBubbleSize").value) || 96;
   settings.bubbleSource = document.getElementById("sBubbleSource").value;
+  settings.bubbleScale = document.getElementById("sBubbleScale").checked;
+  settings.bubbleDetailDistance = Math.max(1, Number(document.getElementById("sBubbleDetail").value) || 60);
   saveSettings();
   updateStorageBadge();
   scheduleBubbles();
@@ -796,6 +802,10 @@ const bubbleState = {
   nextId: 1,
   bboxCache: new Map(),     // "modelId|objektId" -> Box3 | null (finns inte i inläst modell)
   imageCache: new Map(),
+  groups: [],               // [{pos, recs}] - senast beräknade ankarpunkter
+  cameraPos: null,          // kamerans position (meter), för storlek efter avstånd
+  signature: "",            // vad som visas just nu, för att slippa onödiga omritningar
+  cameraTimer: null,
   timer: null,
   running: false,
   pending: false,
@@ -818,25 +828,14 @@ async function updateBubbles() {
   try {
     const recs = settings.showBubbles ? filteredItems(activeTab) : [];
     const groups = await groupByAnchor(recs);
-
-    const icons = [];
-    const iconToRecs = new Map();
-    groups.forEach(g => {
-      const id = bubbleState.nextId++;
-      icons.push({ id, iconPath: bubbleImage(g.recs), position: g.pos, size: settings.bubbleSize });
-      iconToRecs.set(id, g.recs.map(r => r.id));
-    });
-
-    if (bubbleState.icons.length) {
+    bubbleState.groups = groups;
+    if (groups.length && !bubbleState.cameraPos) {
       try {
-        await API.viewer.removeIcon(bubbleState.icons);
-      } catch (e) {
-        console.warn("Kunde inte ta bort gamla bubblor", e);
-      }
+        const cam = await API.viewer.getCamera();
+        if (cam && cam.position) bubbleState.cameraPos = cam.position;
+      } catch (e) { /* storlek utan avstånd */ }
     }
-    bubbleState.icons = icons;
-    bubbleState.iconToRecs = iconToRecs;
-    if (icons.length) await API.viewer.addIcon(icons);
+    await applyBubbleIcons();
 
     const placed = groups.reduce((n, g) => n + g.recs.length, 0);
     setBubbleHint(settings.showBubbles
@@ -854,6 +853,78 @@ async function updateBubbles() {
       scheduleBubbles(0);
     }
   }
+}
+
+/**
+ * Lägger ut bubblorna för bubbleState.groups. Trimble ritar ikoner med fast
+ * storlek på skärmen, så utan åtgärd blir en bubbla enorm i förhållande till
+ * modellen när man zoomar ut. Därför räknas storleken om efter kamerans
+ * avstånd (krymper när man zoomar ut, som ett riktigt objekt), och längre
+ * bort än "detaljavståndet" visas bara en liten nål i stället för hela
+ * bubblan. Storleken avrundas i steg så att vi inte ritar om vid varje
+ * liten kamerarörelse.
+ */
+async function applyBubbleIcons() {
+  const base = settings.bubbleSize;
+  const refDistance = 25;                   // meter där bubblan har grundstorleken
+  const cam = bubbleState.cameraPos;
+  const scale = settings.bubbleScale !== false && cam;
+
+  const specs = bubbleState.groups.map(g => {
+    if (!scale) return { g, pin: false, size: base };
+    const d = Math.max(0.5, Math.hypot(g.pos.x - cam.x, g.pos.y - cam.y, g.pos.z - cam.z));
+    if (d > settings.bubbleDetailDistance) {
+      return { g, pin: true, size: quantize(base * Math.max(0.25, Math.min(0.45, 0.45 * refDistance * 2 / d))) };
+    }
+    return { g, pin: false, size: quantize(base * Math.max(0.35, Math.min(1.5, refDistance / d))) };
+  });
+
+  const signature = JSON.stringify([base, settings.bubbleSource, specs.map(sp =>
+    [sp.g.pos.x, sp.g.pos.y, sp.g.pos.z, sp.pin, sp.size, sp.g.recs.map(r => [r.id, r.updated_at, r.done, (planById.get(String(r.plan_item_id)) || {}).status].join()).join()])]);
+  if (signature === bubbleState.signature) return;
+
+  const icons = [];
+  const iconToRecs = new Map();
+  specs.forEach(sp => {
+    const id = bubbleState.nextId++;
+    const iconPath = sp.pin ? pinImage(sp.g.recs) : bubbleImage(sp.g.recs);
+    icons.push({ id, iconPath, position: sp.g.pos, size: sp.size });
+    iconToRecs.set(id, sp.g.recs.map(r => r.id));
+  });
+
+  const old = bubbleState.icons;
+  bubbleState.icons = icons;
+  bubbleState.iconToRecs = iconToRecs;
+  bubbleState.signature = signature;
+  // Lägg till de nya innan de gamla tas bort, så att bubblorna inte blinkar.
+  if (icons.length) await API.viewer.addIcon(icons);
+  if (old.length) {
+    try {
+      await API.viewer.removeIcon(old);
+    } catch (e) {
+      console.warn("Kunde inte ta bort gamla bubblor", e);
+    }
+  }
+}
+
+function quantize(size) {
+  return Math.max(8, Math.round(size / 8) * 8);
+}
+
+function onCameraChanged(camera) {
+  if (!camera || !camera.position) return;
+  bubbleState.cameraPos = camera.position;
+  if (!settings.showBubbles || settings.bubbleScale === false || !bubbleState.groups.length) return;
+  if (bubbleState.cameraTimer) return;       // max en omräkning per 250 ms
+  bubbleState.cameraTimer = setTimeout(async () => {
+    bubbleState.cameraTimer = null;
+    if (bubbleState.running) return;         // updateBubbles tar med nya kameran ändå
+    try {
+      await applyBubbleIcons();
+    } catch (e) {
+      console.warn("Kunde inte uppdatera bubblornas storlek", e);
+    }
+  }, 250);
 }
 
 function setBubbleHint(text) {
@@ -959,6 +1030,16 @@ function bubbleImage(recs) {
   return bubbleState.imageCache.get(key);
 }
 
+function pinImage(recs) {
+  const kind = bubbleKind(recs[0]);
+  if (settings.bubbleSource === "static") {
+    return new URL(`callouts/${kind}.png`, window.location.href).href;
+  }
+  const key = "pin:" + kind;
+  if (!bubbleState.imageCache.has(key)) bubbleState.imageCache.set(key, drawPin(kind));
+  return bubbleState.imageCache.get(key);
+}
+
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -1007,16 +1088,21 @@ function drawGlyph(ctx, kind, cx, cy, r) {
 
 /** Ritar en callout-bubbla och returnerar den som PNG-data-URL. */
 function drawBubble(spec) {
-  const S = 2;                              // upplösning (retina)
-  const W = 300, pad = 12, tip = 14, radius = 10;
+  // Trimble ritar ikoner som kvadrater - en icke-kvadratisk bild trycks ihop
+  // (smal, suddig text). Därför en kvadratisk canvas i hög upplösning
+  // (1024 px, en tvåpotens så att texturen inte skalas om), med bubblan i
+  // övre halvan och spetsen exakt i mitten, på ankarpunkten.
+  const PX = 1024, W = 300;
+  const S = PX / W;
+  const pad = 12, tip = 14, radius = 10;
   const lines = [spec.sub, spec.plan].filter(Boolean);
   const H = 22 + pad * 2 + lines.length * 18;
   const canvas = document.createElement("canvas");
-  canvas.width = W * S;
-  canvas.height = (H + tip + 6) * 2 * S;    // bubblan i övre halvan, spetsen i mitten
+  canvas.width = PX;
+  canvas.height = PX;
   const ctx = canvas.getContext("2d");
   ctx.scale(S, S);
-  const x = 4, y = canvas.height / S / 2 - tip - H, w = W - 8;
+  const x = 4, y = W / 2 - tip - H, w = W - 8;
   const color = BUBBLE_COLORS[spec.kind];
 
   // Kropp + spets som en form, med skugga
@@ -1052,8 +1138,8 @@ function drawBubble(spec) {
   drawGlyph(ctx, spec.kind, x + 6 + pad + 10, y + pad + 11, 11);
 
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#1f2328";
-  ctx.font = `600 16px ${font}`;
+  ctx.fillStyle = "#111827";
+  ctx.font = `700 16px ${font}`;
   const title = fitText(ctx, spec.title, x + w - pad - badgeW - textX);
   ctx.fillText(title, textX, y + pad + 11);
   if (spec.kind === "done") {
@@ -1065,11 +1151,11 @@ function drawBubble(spec) {
     ctx.stroke();
   }
 
-  ctx.font = `13px ${font}`;
+  ctx.font = `600 13px ${font}`;
   lines.forEach((line, i) => {
     const isPlan = line === spec.plan && i === lines.length - 1 && spec.plan;
     ctx.fillStyle = isPlan ? (spec.planLate ? BUBBLE_COLORS.overdue : BUBBLE_COLORS.done)
-      : spec.kind === "overdue" && i === 0 ? BUBBLE_COLORS.overdue : "#6b7280";
+      : spec.kind === "overdue" && i === 0 ? BUBBLE_COLORS.overdue : "#374151";
     ctx.fillText(fitText(ctx, (isPlan ? "4D: " : "") + line, x + w - pad - textX), textX, y + pad + 22 + 9 + i * 18);
   });
 
@@ -1088,18 +1174,18 @@ function drawBubble(spec) {
 
 /** Enkel nål-ikon (för "Enkel ikon"-läget; genereras till docs/callouts/*.png). */
 function drawPin(kind) {
-  const size = 128;
+  const size = 256;                         // kvadratisk, se drawBubble
   const canvas = document.createElement("canvas");
   canvas.width = size;
-  canvas.height = size * 2;                 // spetsen i bildens mitt
+  canvas.height = size;
   const ctx = canvas.getContext("2d");
-  const cx = size / 2, r = 44, cy = size - 16 - r * 1.35;
+  const cx = size / 2, r = 44, cy = size / 2 - 16 - r * 1.35; // spetsen i bildens mitt
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.3)";
   ctx.shadowBlur = 6;
   ctx.beginPath();
   ctx.arc(cx, cy, r, Math.PI * 0.8, Math.PI * 2.2);
-  ctx.lineTo(cx, size);
+  ctx.lineTo(cx, size / 2);
   ctx.closePath();
   ctx.fillStyle = "#fff";
   ctx.fill();

@@ -122,6 +122,10 @@
     <label>Storlek på 3D-bubblor
       <input type="range" id="sBubbleSize" min="16" max="256" step="8" />
     </label>
+    <label class="check"><input type="checkbox" id="sBubbleScale" /> Anpassa bubblornas storlek efter avstånd</label>
+    <label>Visa hela bubblan inom (meter från kameran) <span class="hint">– längre bort visas en liten nål</span>
+      <input type="number" id="sBubbleDetail" min="1" step="5" />
+    </label>
     <label>Bild för 3D-bubblor
       <select id="sBubbleSource">
         <option value="generated">Detaljerad (rubrik, datum, status)</option>
