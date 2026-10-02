@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1600" height="1000" fill="#f4f1e8"/>
+  <g stroke="#c8c2b0" stroke-width="1">
+    <path d="M0 100H1600M0 200H1600M0 300H1600M0 400H1600M0 500H1600M0 600H1600M0 700H1600M0 800H1600M0 900H1600"/>
+    <path d="M100 0V1000M200 0V1000M300 0V1000M400 0V1000M500 0V1000M600 0V1000M700 0V1000M800 0V1000M900 0V1000M1000 0V1000M1100 0V1000M1200 0V1000M1300 0V1000M1400 0V1000M1500 0V1000"/>
+  </g>
+  <!-- väg -->
+  <path d="M0 880 H1600" stroke="#8a8a8a" stroke-width="70"/>
+  <path d="M0 880 H1600" stroke="#fff" stroke-width="4" stroke-dasharray="40 30"/>
+  <path d="M260 845 V600" stroke="#8a8a8a" stroke-width="60"/>
+  <text x="300" y="800" font-size="26" fill="#333">Infart grind 1</text>
+  <!-- byggnader -->
+  <rect x="520" y="180" width="560" height="320" fill="#9fb3c8" stroke="#13233b" stroke-width="4"/>
+  <text x="800" y="350" font-size="40" font-weight="800" text-anchor="middle" fill="#13233b">742 Sikthall</text>
+  <rect x="1150" y="220" width="260" height="200" fill="#c4d3e3" stroke="#13233b" stroke-width="4"/>
+  <text x="1280" y="330" font-size="30" font-weight="800" text-anchor="middle" fill="#13233b">744 Fläkthus</text>
+  <rect x="1150" y="470" width="260" height="170" fill="#c4d3e3" stroke="#13233b" stroke-width="4"/>
+  <text x="1280" y="565" font-size="26" font-weight="800" text-anchor="middle" fill="#13233b">745 Förtjockarhus</text>
+  <!-- kran -->
+  <circle cx="1100" cy="560" r="230" fill="#f5a623" fill-opacity=".12" stroke="#f5a623" stroke-width="4" stroke-dasharray="14 10"/>
+  <rect x="1085" y="545" width="30" height="30" fill="#f5a623" stroke="#333" stroke-width="3"/>
+  <text x="1100" y="610" font-size="22" text-anchor="middle" fill="#7a4d00">Tornkran</text>
+  <!-- bodar -->
+  <g fill="#fff" stroke="#13233b" stroke-width="3">
+    <rect x="80" y="600" width="80" height="40"/><rect x="80" y="650" width="80" height="40"/><rect x="80" y="700" width="80" height="40"/>
+  </g>
+  <text x="120" y="585" font-size="24" text-anchor="middle" fill="#13233b">Bodar</text>
+  <!-- upplag -->
+  <rect x="520" y="560" width="300" height="160" fill="#e9d7a8" stroke="#a07c22" stroke-width="3" stroke-dasharray="10 6"/>
+  <text x="670" y="650" font-size="28" text-anchor="middle" fill="#6d5410">Upplag / lossning</text>
+  <!-- gångväg -->
+  <path d="M160 660 H480 V530 H520" fill="none" stroke="#2ecc71" stroke-width="12" stroke-dasharray="20 12"/>
+  <text x="330" y="645" font-size="22" fill="#1b7a43">Gångväg</text>
+  <!-- återsamling -->
+  <circle cx="120" cy="420" r="48" fill="#2ecc71"/>
+  <text x="120" y="432" font-size="34" text-anchor="middle" fill="#fff" font-weight="800">⚑</text>
+  <text x="120" y="500" font-size="22" text-anchor="middle" fill="#1b7a43" font-weight="700">Återsamling</text>
+  <text x="50" y="80" fill="#13233b" font-size="44" font-weight="800">EXEMPEL – APD-plan</text>
+  <text x="50" y="128" fill="#4a5a75" font-size="28">Byt mot projektets riktiga APD-plan (PNG/JPG)</text>
+</svg>

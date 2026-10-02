@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bodskärm</title>
+  <link rel="stylesheet" href="css/bodskarm.css">
+</head>
+<body>
+  <div id="scen">
+    <header class="huvud">
+      <div class="h-projekt">
+        <div id="projekt" class="projekt">Bodskärm</div>
+        <div id="underrubrik" class="underrubrik"></div>
+      </div>
+      <div class="h-vy">
+        <div id="titel" class="titel">Läser in…</div>
+        <div class="h-vyrad"><span id="undertitel" class="undertitel"></span><span id="prickar" class="prickar"></span></div>
+      </div>
+      <div id="vader" class="h-vader" hidden></div>
+      <div class="h-tid">
+        <div id="vecka" class="h-vecka"></div>
+        <div class="h-tidrad"><span id="datum" class="datum"></span><span id="klocka" class="klocka"></span></div>
+      </div>
+    </header>
+
+    <main id="innehall" class="innehall"></main>
+
+    <footer class="fot">
+      <div class="progress"><div id="progress"></div></div>
+      <div id="ticker" class="ticker"></div>
+      <div id="status" class="status"></div>
+    </footer>
+    <div class="paus-markering">⏸ Pausad</div>
+  </div>
+
+  <!-- Inställningar -->
+  <script src="config.js"></script>
+  <!-- Bibliotek -->
+  <script src="js/lib/xlsx.full.min.js"></script>
+  <script src="js/lib/qrcode.js"></script>
+  <!-- Motor -->
+  <script src="js/util.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/vader.js"></script>
+  <script src="js/gantt.js"></script>
+  <!-- Vyer (lägg till egna här) -->
+  <script src="js/vyer/tidplan.js"></script>
+  <script src="js/vyer/innehall.js"></script>
+  <script src="js/vyer/vader.js"></script>
+  <!-- Start -->
+  <script src="js/app.js"></script>
+</body>
+</html>

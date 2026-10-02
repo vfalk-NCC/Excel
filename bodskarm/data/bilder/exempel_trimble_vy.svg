@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <linearGradient id="himmel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dfe8f3"/><stop offset="1" stop-color="#f7f9fc"/></linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#himmel)"/>
+  <!-- mark -->
+  <polygon points="800,900 1500,550 800,200 100,550" fill="#c9cfc4"/>
+  <!-- grundplatta -->
+  <polygon points="800,800 1300,550 800,300 300,550" fill="#a8adb3"/>
+  <polygon points="300,550 800,800 800,830 300,580" fill="#8b9097"/>
+  <polygon points="800,800 1300,550 1300,580 800,830" fill="#767b82"/>
+  <!-- befintlig del (grå) -->
+  <polygon points="550,560 800,685 800,445 550,320" fill="#b9bec5"/>
+  <polygon points="800,685 1050,560 1050,320 800,445" fill="#9aa0a8"/>
+  <polygon points="550,320 800,445 1050,320 800,195" fill="#d3d7dc"/>
+  <!-- etapp 2 (markerad) -->
+  <polygon points="800,685 1050,560 1050,430 800,555" fill="#3da9fc" fill-opacity=".85"/>
+  <polygon points="1050,560 1200,485 1200,355 1050,430" fill="#1f86d6" fill-opacity=".85"/>
+  <polygon points="800,555 1050,430 1200,355 950,480" fill="#7cc4ff" fill-opacity=".85"/>
+  <!-- pelare -->
+  <g stroke="#555" stroke-width="6">
+    <line x1="420" y1="610" x2="420" y2="450"/><line x1="480" y1="640" x2="480" y2="480"/>
+    <line x1="1250" y1="545" x2="1250" y2="400"/><line x1="1180" y1="580" x2="1180" y2="435"/>
+  </g>
+  <!-- etikett -->
+  <g>
+    <line x1="1110" y1="430" x2="1290" y2="250" stroke="#13233b" stroke-width="3"/>
+    <rect x="1180" y="180" width="380" height="80" rx="12" fill="#13233b"/>
+    <text x="1370" y="232" fill="#fff" font-size="34" font-weight="700" text-anchor="middle">Etapp 2 – nästa vecka</text>
+  </g>
+  <text x="50" y="80" fill="#13233b" font-size="44" font-weight="800">EXEMPELBILD</text>
+  <text x="50" y="128" fill="#4a5a75" font-size="28">Byt mot en skärmbild från Trimble Connect (data\bilder)</text>
+</svg>
